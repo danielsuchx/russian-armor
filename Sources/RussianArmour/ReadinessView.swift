@@ -24,7 +24,7 @@ struct ReadinessView: View {
                 step(
                     symbol: "point.topleft.down.to.point.bottomright.curvepath",
                     title: "Проверка внешнего выхода",
-                    status: "Доступна по кнопке, с подтверждением",
+                    status: model.preferences.automaticIPChecks ? "Автоматически · \(model.preferences.egressProvider.title)" : "По кнопке · автопроверка выключена",
                     detail: "Работает и с VPN на роутере. Выбранный сервис (ipwho.is или Country.is) возвращает IP и оценку страны запроса Russian Armour. Это не подтверждает маршрут Claude, всех соединений Mac или сам факт VPN."
                 )
                 Divider()

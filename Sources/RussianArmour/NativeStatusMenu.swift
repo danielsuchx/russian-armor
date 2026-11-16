@@ -56,7 +56,7 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
             fields[name] = information(name, symbol: icon)
         }
         fields["Соединения"] = information("Соединения", symbol: "arrow.up.arrow.down")
-        noteItem = information("IP проверяется только по вашему запросу")
+        noteItem = information("Автопроверка IP включена")
         noteItem.toolTip = "Проверка внешнего выхода не доказывает защиту трафика Claude, браузера или всех соединений Mac. Для VPN на роутере локальный туннель не требуется."
         menu.addItem(.separator())
         information("Последние события")
@@ -64,7 +64,7 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         action("Вся история…", symbol: "clock.arrow.circlepath", selector: #selector(showHistory))
         menu.addItem(.separator())
         refreshItem = action("Перепроверить", symbol: "arrow.clockwise", selector: #selector(refresh))
-        refreshItem.toolTip = "Локальная диагностика без внешних запросов. Старый результат проверки IP будет сброшен."
+        refreshItem.toolTip = "Локальная диагностика и сброс результата IP. Если включена автопроверка, внешний IP обновится автоматически после проверки сети."
         checkIPItem = action("Проверить IP и страну…", symbol: "globe", selector: #selector(confirmExternalCheck))
         action("Сетевые соединения…", symbol: "arrow.up.arrow.down", selector: #selector(showTraffic))
         action("Что нужно для защиты?", symbol: "shield.lefthalf.filled", selector: #selector(showReadiness))
@@ -91,7 +91,12 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         noteItem.image = nil
         switch model.externalCheck {
         case .notChecked:
-            noteItem.title = "IP проверяется только по вашему запросу"
+            if model.preferences.automaticIPChecks {
+                noteItem.title = model.isSleeping ? "Автопроверка IP приостановлена" : "Автопроверка IP: ожидаем сеть"
+                noteItem.toolTip = "Автоматический запрос к \(model.preferences.egressProvider.host) после подключения к сети. Отключить можно в настройках."
+            } else {
+                noteItem.title = "Автопроверка IP выключена"
+            }
         case .checking:
             country = "Проверяется…"
             ip = "Проверяется…"
@@ -99,7 +104,9 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         case .observed(let value):
             country = "\(value.countryCode) (\(value.countryName))"
             ip = value.ip
-            noteItem.title = "\(value.provider.title) · только запрос проверки"
+            noteItem.title = model.preferences.automaticIPChecks
+                ? "\(value.provider.title) · автообновление IP"
+                : "\(value.provider.title) · только запрос проверки"
         case .failed(let message):
             country = "Ошибка проверки"
             ip = "Ошибка проверки"
@@ -110,7 +117,9 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
             noteItem.target = self
             noteItem.isEnabled = true
         case .needsRecheck(let message):
-            noteItem.title = "Результат сброшен — повторите проверку"
+            noteItem.title = model.preferences.automaticIPChecks
+                ? (model.isSleeping ? "Автопроверка IP приостановлена" : "Автопроверка IP: ожидаем сеть")
+                : "Результат сброшен — повторите проверку"
             noteItem.toolTip = message
         }
         fields["Страна"]?.title = "Страна: \(country)"
@@ -139,7 +148,8 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         }
         refreshItem.isEnabled = !model.isSleeping
         checkIPItem.isEnabled = !model.externalCheck.isChecking && !model.isSleeping
-        checkIPItem.title = model.externalCheck.isChecking ? "Проверяем IP и страну…" : "Проверить IP и страну…"
+        checkIPItem.title = model.externalCheck.isChecking ? "Проверяем IP и страну…"
+            : (model.preferences.automaticIPChecks ? "Обновить IP и страну" : "Проверить IP и страну…")
     }
 
     private var vpnExplanation: String {
@@ -199,6 +209,10 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
 
     @objc private func confirmExternalCheck() {
         guard !model.externalCheck.isChecking, !model.isSleeping else { return }
+        if model.preferences.automaticIPChecks {
+            model.refreshExternalIP()
+            return
+        }
         NSApp.activate(ignoringOtherApps: true)
         let alert = Self.externalCheckConsentAlert()
         let response = alert.runModal()
@@ -236,7 +250,10 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         guard case .failed(let message) = model.externalCheck else { return nil }
         let alert = NSAlert()
         alert.messageText = "Не удалось определить внешний IP"
-        alert.informativeText = "\(model.externalProvider.title): \(message)\n\nIP и страна неизвестны. Можно повторить проверку через другой сервис: закройте это окно и нажмите «Проверить IP и страну…». Новый запрос выполняется только после выбора сервиса."
+        let nextStep = model.preferences.automaticIPChecks
+            ? "IP и страна неизвестны. При доступной сети автопроверка повторится примерно через минуту через \(model.preferences.egressProvider.title). Для смены сервиса или отключения автопроверки откройте настройки."
+            : "IP и страна неизвестны. Можно повторить проверку через другой сервис: закройте это окно и нажмите «Проверить IP и страну…». Новый запрос выполняется только после выбора сервиса."
+        alert.informativeText = "\(model.externalProvider.title): \(message)\n\n\(nextStep)"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Закрыть")
         return alert

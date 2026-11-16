@@ -7,7 +7,9 @@ import ArmourCore
 final class AppModelTests: XCTestCase {
     private func isolatedDefaults() -> (UserDefaults, String) {
         let name = "RussianArmourTests.\(UUID().uuidString)"
-        return (UserDefaults(suiteName: name)!, name)
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.set(try! JSONEncoder().encode(AppPreferences(automaticIPChecks: false)), forKey: "armour.preferences.v1")
+        return (defaults, name)
     }
 
     private func fixture() throws -> EgressObservation {

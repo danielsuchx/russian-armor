@@ -1,8 +1,8 @@
 import Darwin
 import Foundation
 
-/// A provider is selected at confirmation time; failures never contact another provider.
-public enum EgressProvider: CaseIterable, Equatable, Sendable {
+/// The selected provider is used for manual and automatic checks; no fallback.
+public enum EgressProvider: String, CaseIterable, Codable, Equatable, Sendable {
     case countryIS
     case ipWhoIS
 

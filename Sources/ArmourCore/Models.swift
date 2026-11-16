@@ -67,24 +67,34 @@ public struct AppPreferences: Equatable, Codable, Sendable {
     public var showInterfaceNames: Bool
     public var recordNetworkEvents: Bool
     public var vpnLocation: VPNLocation
+    public var automaticIPChecks: Bool
+    public var egressProvider: EgressProvider
 
     public init(
         showInterfaceNames: Bool = true,
         recordNetworkEvents: Bool = true,
-        vpnLocation: VPNLocation = .unspecified
+        vpnLocation: VPNLocation = .unspecified,
+        automaticIPChecks: Bool = true,
+        egressProvider: EgressProvider = .ipWhoIS
     ) {
         self.showInterfaceNames = showInterfaceNames
         self.recordNetworkEvents = recordNetworkEvents
         self.vpnLocation = vpnLocation
+        self.automaticIPChecks = automaticIPChecks
+        self.egressProvider = egressProvider
     }
 
-    private enum CodingKeys: CodingKey { case showInterfaceNames, recordNetworkEvents, vpnLocation }
+    private enum CodingKeys: CodingKey {
+        case showInterfaceNames, recordNetworkEvents, vpnLocation, automaticIPChecks, egressProvider
+    }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         showInterfaceNames = try values.decodeIfPresent(Bool.self, forKey: .showInterfaceNames) ?? true
         recordNetworkEvents = try values.decodeIfPresent(Bool.self, forKey: .recordNetworkEvents) ?? true
         vpnLocation = try values.decodeIfPresent(VPNLocation.self, forKey: .vpnLocation) ?? .unspecified
+        automaticIPChecks = try values.decodeIfPresent(Bool.self, forKey: .automaticIPChecks) ?? true
+        egressProvider = try values.decodeIfPresent(EgressProvider.self, forKey: .egressProvider) ?? .ipWhoIS
     }
 }
 

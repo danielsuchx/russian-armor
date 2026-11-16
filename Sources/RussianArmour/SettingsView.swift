@@ -27,7 +27,7 @@ struct SettingsView: View {
                         .foregroundStyle(.orange)
                     Text(model.protection.detail)
                         .font(.callout)
-                    Text("VPN может работать на роутере или на Mac. Внешний IP проверяется только с вашего подтверждения. Файрвол и маршруты не изменяются.")
+                    Text("VPN может работать на роутере или на Mac. Проверка внешнего IP не подтверждает маршрут других приложений. Файрвол и маршруты не изменяются.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -47,6 +47,20 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Определять IP и страну автоматически", isOn: $model.preferences.automaticIPChecks)
+                    .toggleStyle(.switch)
+                Picker("Сервис проверки IP", selection: $model.preferences.egressProvider) {
+                    ForEach(EgressProvider.allCases, id: \.self) { provider in
+                        Text(provider.title).tag(provider)
+                    }
+                }
+                Text("При запуске, изменении сети и пробуждении, затем примерно раз в минуту. \(model.preferences.egressProvider.host) получает внешний IP запроса. При ошибке повторяется запрос к тому же сервису — без переключения на другой.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             VStack(alignment: .leading, spacing: 14) {
                 Toggle("Показывать имена туннелей при VPN на Mac", isOn: $model.preferences.showInterfaceNames)
                 Toggle("Записывать изменения сети и туннелей", isOn: $model.preferences.recordNetworkEvents)
@@ -56,7 +70,7 @@ struct SettingsView: View {
 
             Divider()
             Label {
-                Text("Настройки и последние 100 событий — только на этом Mac. Проверка IP — по кнопке, с выбором ipwho.is или Country.is и подтверждением передачи IP выбранному сервису. IP и страна не сохраняются в историю.")
+                Text("Настройки и последние 100 событий — только на этом Mac. IP и страна остаются в памяти и не сохраняются в историю. Если отключить автопроверку, запросы выполняются только по кнопке с выбором сервиса.")
             } icon: {
                 Image(systemName: "internaldrive")
             }

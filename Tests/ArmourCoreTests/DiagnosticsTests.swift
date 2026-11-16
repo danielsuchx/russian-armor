@@ -28,6 +28,24 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertFalse(preferences.showInterfaceNames)
         XCTAssertFalse(preferences.recordNetworkEvents)
         XCTAssertEqual(preferences.vpnLocation, .unspecified)
+        XCTAssertTrue(preferences.automaticIPChecks)
+        XCTAssertEqual(preferences.egressProvider, .ipWhoIS)
+    }
+
+    func testAutomaticCheckPreferencesRoundTripPreservesOptOutAndProvider() throws {
+        let preferences = AppPreferences(vpnLocation: .router, automaticIPChecks: false, egressProvider: .countryIS)
+        let restored = try JSONDecoder().decode(AppPreferences.self, from: JSONEncoder().encode(preferences))
+        XCTAssertEqual(restored, preferences)
+    }
+
+    func testExistingVPNPreferenceSurvivesAutomaticCheckMigration() throws {
+        let old = Data(#"{"showInterfaceNames":false,"recordNetworkEvents":false,"vpnLocation":"router"}"#.utf8)
+        let preferences = try JSONDecoder().decode(AppPreferences.self, from: old)
+        XCTAssertEqual(preferences.vpnLocation, .router)
+        XCTAssertFalse(preferences.showInterfaceNames)
+        XCTAssertFalse(preferences.recordNetworkEvents)
+        XCTAssertTrue(preferences.automaticIPChecks)
+        XCTAssertEqual(preferences.egressProvider, .ipWhoIS)
     }
 
     func testRouterPreferenceRoundTrip() throws {

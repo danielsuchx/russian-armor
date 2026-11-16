@@ -2,7 +2,7 @@ import ArmourCore
 import Foundation
 
 /// No cookies, persisted cache, background requests or automatic redirects.
-/// Call only after the user explicitly confirms the disclosure to this provider.
+/// Invoked by the enabled automatic policy or an explicitly requested manual check.
 struct EgressChecker {
     private let provider: EgressProvider
     private let session: URLSession

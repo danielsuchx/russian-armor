@@ -7,7 +7,8 @@ import ArmourCore
 @MainActor
 final class NativeMenuTests: XCTestCase {
     private func makeModel(defaults: UserDefaults) -> AppModel {
-        AppModel(defaults: defaults, startsMonitoring: false, diagnosticsReader: {
+        defaults.set(try! JSONEncoder().encode(AppPreferences(automaticIPChecks: false)), forKey: "armour.preferences.v1")
+        return AppModel(defaults: defaults, startsMonitoring: false, diagnosticsReader: {
             LocalDiagnosticsSnapshot(tunnels: .observed([]), claudeDesktop: .running, checkedAt: Date())
         })
     }
@@ -187,6 +188,7 @@ final class NativeMenuTests: XCTestCase {
             if attempts == 1 { throw URLError(.timedOut) }
             return response
         })
+        model.preferences.automaticIPChecks = false
         let controller = NativeStatusMenu(model: model, createStatusItem: false) { _ in }
         model.checkExternalIPAfterConsent(provider: .ipWhoIS)
         for _ in 0..<100 {
@@ -215,6 +217,68 @@ final class NativeMenuTests: XCTestCase {
         XCTAssertNil(note.target)
         XCTAssertNil(note.image)
         XCTAssertNil(controller.externalFailureAlert())
+    }
+
+    func testAutomaticMenuShowsRequestAndResultAndRefreshDoesNotAskAgain() async throws {
+        _ = NSApplication.shared
+        let name = "NativeMenuTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let response = try EgressObservation.decode(
+            Data(#"{"success":true,"ip":"203.0.113.7","country_code":"NL"}"#.utf8), provider: .ipWhoIS
+        )
+        var requests: [EgressProvider] = []
+        let model = AppModel(defaults: defaults, startsMonitoring: false, automaticCheckDelay: 0,
+                             diagnosticsReader: { .notChecked }, egressReader: {
+            requests.append($0)
+            return response
+        })
+        let controller = NativeStatusMenu(model: model, createStatusItem: false) { _ in }
+        XCTAssertTrue(controller.menu.items.contains { $0.title == "Автопроверка IP: ожидаем сеть" })
+        model.receive(NetworkSnapshot(connectivity: .available))
+        controller.updateContents()
+        XCTAssertTrue(controller.menu.items.contains { $0.title == "IP: Проверяется…" })
+        XCTAssertTrue(controller.menu.items.contains { $0.title == "Запрос к ipwho.is…" })
+        XCTAssertFalse(try XCTUnwrap(controller.menu.items.first { $0.title == "Проверяем IP и страну…" }).isEnabled)
+        for _ in 0..<100 {
+            if !model.externalCheck.isChecking { break }
+            await Task.yield()
+        }
+        controller.updateContents()
+        XCTAssertTrue(controller.menu.items.contains { $0.title == "IP: 203.0.113.7" })
+        XCTAssertTrue(controller.menu.items.contains { $0.title == "ipwho.is · автообновление IP" })
+        let index = try XCTUnwrap(controller.menu.items.firstIndex { $0.title == "Обновить IP и страну" })
+        controller.menu.performActionForItem(at: index)
+        for _ in 0..<100 {
+            if !model.externalCheck.isChecking { break }
+            await Task.yield()
+        }
+        XCTAssertEqual(requests, [.ipWhoIS, .ipWhoIS], "Automatic mode refreshes the configured service without a dialog")
+        model.preferences.automaticIPChecks = false
+        controller.updateContents()
+        XCTAssertTrue(controller.menu.items.contains { $0.title == "Автопроверка IP выключена" })
+        XCTAssertTrue(controller.menu.items.contains { $0.title == "Проверить IP и страну…" })
+    }
+
+    func testAutomaticFailureExplainsScheduledRetryAndSettings() async throws {
+        let name = "NativeMenuTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let model = AppModel(defaults: defaults, startsMonitoring: false, automaticCheckDelay: 0,
+                             diagnosticsReader: { .notChecked }, egressReader: { _ in throw URLError(.timedOut) })
+        let controller = NativeStatusMenu(model: model, createStatusItem: false) { _ in }
+        model.receive(NetworkSnapshot(connectivity: .available))
+        for _ in 0..<100 {
+            if !model.externalCheck.isChecking { break }
+            await Task.yield()
+        }
+        controller.updateContents()
+        let alert = try XCTUnwrap(controller.externalFailureAlert())
+        XCTAssertTrue(alert.informativeText.contains("автопроверка повторится"))
+        XCTAssertTrue(alert.informativeText.contains("ipwho.is"))
+        XCTAssertTrue(alert.informativeText.contains("настройки"))
+        XCTAssertFalse(alert.informativeText.contains("Новый запрос выполняется только после выбора сервиса"))
+        XCTAssertTrue(controller.menu.items.contains { $0.title == "IP: Ошибка проверки" })
     }
 
     func testHistoryActionOpensCorrectWindow() async throws {

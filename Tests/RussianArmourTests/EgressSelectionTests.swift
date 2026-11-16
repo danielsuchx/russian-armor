@@ -7,7 +7,9 @@ import ArmourCore
 final class EgressSelectionTests: XCTestCase {
     private func defaults() -> (UserDefaults, String) {
         let name = "EgressSelectionTests.\(UUID().uuidString)"
-        return (UserDefaults(suiteName: name)!, name)
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.set(try! JSONEncoder().encode(AppPreferences(automaticIPChecks: false)), forKey: "armour.preferences.v1")
+        return (defaults, name)
     }
 
     private func settle(_ model: AppModel) async {

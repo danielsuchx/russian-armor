@@ -4,3 +4,10 @@
 dist/
 *.xcuserstate
 xcuserdata/
+
+# Local development settings and tools
+/.claude/
+/.codex/
+/.t3/
+/.env
+/.env.*

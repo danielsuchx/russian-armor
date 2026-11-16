@@ -22,7 +22,7 @@ final class NativeMenuTests: XCTestCase {
         XCTAssertTrue(controller.menu.items.allSatisfy { $0.view == nil })
         XCTAssertEqual(controller.menu.font.pointSize, 13)
         let header = try XCTUnwrap(controller.menu.items.first)
-        XCTAssertEqual(header.title, "Защита не настроена")
+        XCTAssertEqual(header.title, "Защита недоступна")
         XCTAssertLessThanOrEqual(try XCTUnwrap(header.image).size.height, 12)
         XCTAssertFalse(header.title.contains(":"), "Header must not include a clock")
         XCTAssertFalse(header.isEnabled)
@@ -35,10 +35,10 @@ final class NativeMenuTests: XCTestCase {
         let model = makeModel(defaults: defaults)
         let controller = NativeStatusMenu(model: model, createStatusItem: false) { _ in }
         let titles = [
-            "Защита не настроена", "Страна: Не проверена", "VPN: Не указано", "IP: Не проверен",
+            "Защита недоступна", "Страна: Не проверена", "VPN: Не указано", "IP: Не проверен",
             "IPv6: утечки не проверены", "Claude: открыт", "Защита: трафик не блокируется",
             "Вся история…", "Перепроверить", "Проверить IP и страну…",
-            "Что нужно для защиты?", "Сетевые соединения…", "Соединения: Наблюдение выключено",
+            "О защите Russian Armour", "Сетевые соединения…", "Соединения: Наблюдение выключено",
             "Настройки…", "Выйти из Russian Armour"
         ]
         for title in titles {
@@ -135,11 +135,11 @@ final class NativeMenuTests: XCTestCase {
 
     func testConsentRequiresExplicitProviderAndCancelSelectsNothing() async {
         let alert = NativeStatusMenu.externalCheckConsentAlert()
-        XCTAssertEqual(alert.buttons.map(\.title), ["Через ipwho.is", "Через Country.is", "Отмена"])
-        XCTAssertTrue(alert.informativeText.contains("api.country.is"))
+        XCTAssertEqual(alert.buttons.map(\.title), ["Через ipwho.is", "Через IPinfo", "Отмена"])
+        XCTAssertTrue(alert.informativeText.contains("ipinfo.io"))
         XCTAssertTrue(alert.informativeText.contains("ipwho.is"))
         XCTAssertEqual(NativeStatusMenu.confirmedProvider(for: .alertFirstButtonReturn), .ipWhoIS)
-        XCTAssertEqual(NativeStatusMenu.confirmedProvider(for: .alertSecondButtonReturn), .countryIS)
+        XCTAssertEqual(NativeStatusMenu.confirmedProvider(for: .alertSecondButtonReturn), .ipInfo)
         XCTAssertNil(NativeStatusMenu.confirmedProvider(for: .alertThirdButtonReturn))
         XCTAssertNil(NativeStatusMenu.confirmedProvider(for: .abort))
     }
@@ -168,7 +168,7 @@ final class NativeMenuTests: XCTestCase {
         XCTAssertTrue(controller.menu.items.contains { $0.title == "IP: Ошибка проверки" })
         XCTAssertFalse(controller.menu.items.contains { $0.title.contains("Результат сброшен") })
         let alert = try XCTUnwrap(controller.externalFailureAlert())
-        XCTAssertTrue(alert.informativeText.contains("Country.is"))
+        XCTAssertTrue(alert.informativeText.contains("IPinfo"))
         XCTAssertTrue(alert.informativeText.contains("TLS"))
         XCTAssertTrue(alert.informativeText.contains("−1200"))
         XCTAssertEqual(alert.buttons.map(\.title), ["Закрыть"])

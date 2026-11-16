@@ -33,7 +33,7 @@ final class EgressSelectionTests: XCTestCase {
         })
         XCTAssertTrue(requests.isEmpty)
         model.checkExternalIPAfterConsent(provider: .ipWhoIS)
-        model.checkExternalIPAfterConsent(provider: .countryIS)
+        model.checkExternalIPAfterConsent(provider: .ipInfo)
         await settle(model)
         XCTAssertEqual(requests, [.ipWhoIS])
         XCTAssertEqual(model.externalProvider, .ipWhoIS)
@@ -53,7 +53,7 @@ final class EgressSelectionTests: XCTestCase {
             requests.append($0)
             throw error
         })
-        model.checkExternalIPAfterConsent(provider: .countryIS)
+        model.checkExternalIPAfterConsent(provider: .ipInfo)
         await settle(model)
         let failed = model.externalCheck
         guard case .failed(let message) = failed else { return XCTFail("TLS error was not exposed") }
@@ -64,7 +64,7 @@ final class EgressSelectionTests: XCTestCase {
         model.prepareForSleep()
         model.resumeAfterWake()
         await Task.yield()
-        XCTAssertEqual(requests, [.countryIS])
+        XCTAssertEqual(requests, [.ipInfo])
         XCTAssertEqual(model.externalCheck, failed)
         for data in storage.dictionaryRepresentation().values.compactMap({ $0 as? Data }) {
             let persisted = String(decoding: data, as: UTF8.self)
@@ -83,15 +83,15 @@ final class EgressSelectionTests: XCTestCase {
         )
         let model = AppModel(defaults: storage, startsMonitoring: false, diagnosticsReader: { .notChecked }, egressReader: {
             requests.append($0)
-            if $0 == .countryIS { throw URLError(.secureConnectionFailed) }
+            if $0 == .ipInfo { throw URLError(.secureConnectionFailed) }
             return response
         })
-        model.checkExternalIPAfterConsent(provider: .countryIS)
+        model.checkExternalIPAfterConsent(provider: .ipInfo)
         await settle(model)
-        XCTAssertEqual(requests, [.countryIS])
+        XCTAssertEqual(requests, [.ipInfo])
         model.checkExternalIPAfterConsent(provider: .ipWhoIS)
         await settle(model)
-        XCTAssertEqual(requests, [.countryIS, .ipWhoIS])
+        XCTAssertEqual(requests, [.ipInfo, .ipWhoIS])
         XCTAssertEqual(model.externalCheck, .observed(response))
     }
 
@@ -114,10 +114,10 @@ final class EgressSelectionTests: XCTestCase {
             Data(#"{"success":true,"ip":"203.0.113.2","country_code":"DE"}"#.utf8), provider: .ipWhoIS
         )
         let model = AppModel(defaults: storage, startsMonitoring: false, diagnosticsReader: { .notChecked }, egressReader: {
-            if $0 == .countryIS { return try await withCheckedThrowingContinuation { pending = $0 } }
+            if $0 == .ipInfo { return try await withCheckedThrowingContinuation { pending = $0 } }
             return newResponse
         })
-        model.checkExternalIPAfterConsent(provider: .countryIS)
+        model.checkExternalIPAfterConsent(provider: .ipInfo)
         for _ in 0..<100 {
             if pending != nil { break }
             await Task.yield()

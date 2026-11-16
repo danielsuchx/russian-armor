@@ -4,13 +4,31 @@ import XCTest
 
 final class EgressProviderTests: XCTestCase {
     func testProviderEndpointsAreExplicitHTTPSDestinations() {
-        XCTAssertEqual(EgressProvider.countryIS.endpoint.absoluteString, "https://api.country.is/")
+        XCTAssertEqual(EgressProvider.ipInfo.endpoint.absoluteString, "https://ipinfo.io/json")
         XCTAssertEqual(EgressProvider.ipWhoIS.endpoint.absoluteString, "https://ipwho.is/?fields=success,ip,country_code")
         for provider in EgressProvider.allCases {
             XCTAssertEqual(provider.endpoint.scheme, "https")
             XCTAssertEqual(provider.endpoint.host, provider.host)
             XCTAssertNil(provider.endpoint.user)
             XCTAssertNil(provider.endpoint.password)
+        }
+        XCTAssertEqual(EgressProvider.ipWhoIS.alternate, .ipInfo)
+        XCTAssertEqual(EgressProvider.ipInfo.alternate, .ipWhoIS)
+    }
+
+    func testConsensusRequiresTwoProvidersToAgreeOnAddress() throws {
+        let whois = try EgressObservation.decode(
+            Data(#"{"success":true,"ip":"2001:db8::7","country_code":"NL"}"#.utf8), provider: .ipWhoIS
+        )
+        let ipinfo = try EgressObservation.decode(Data(#"{"ip":"2001:0db8:0:0:0:0:0:7","country":"FI"}"#.utf8))
+        XCTAssertEqual(try EgressConsensus.confirm(whois, ipinfo), whois)
+
+        let differentIP = try EgressObservation.decode(Data(#"{"ip":"203.0.113.8","country":"NL"}"#.utf8))
+        XCTAssertThrowsError(try EgressConsensus.confirm(whois, differentIP)) {
+            XCTAssertEqual($0 as? EgressError, .providersDisagree)
+        }
+        XCTAssertThrowsError(try EgressConsensus.confirm(whois, whois)) {
+            XCTAssertEqual($0 as? EgressError, .independentConfirmationFailed)
         }
     }
 
@@ -26,9 +44,9 @@ final class EgressProviderTests: XCTestCase {
         }
     }
 
-    func testCountryISRetainsItsOwnParserAndAttribution() throws {
+    func testIPInfoRetainsItsOwnParserAndAttribution() throws {
         let observation = try EgressObservation.decode(Data(#"{"ip":"203.0.113.7","country":"NL"}"#.utf8))
-        XCTAssertEqual(observation.provider, .countryIS)
+        XCTAssertEqual(observation.provider, .ipInfo)
     }
 
     func testProviderFailureWithHTTP200IsNotAccepted() {
@@ -46,7 +64,13 @@ final class EgressProviderTests: XCTestCase {
         let country = Data(#"{"ip":"203.0.113.7","country":"NL"}"#.utf8)
         let whois = Data(#"{"success":true,"ip":"203.0.113.7","country_code":"NL"}"#.utf8)
         XCTAssertThrowsError(try EgressObservation.decode(country, provider: .ipWhoIS))
-        XCTAssertThrowsError(try EgressObservation.decode(whois, provider: .countryIS))
+        XCTAssertThrowsError(try EgressObservation.decode(whois, provider: .ipInfo))
+    }
+
+    func testLegacyCountryISPreferenceMigratesToIPInfo() throws {
+        let provider = try JSONDecoder().decode(EgressProvider.self, from: Data(#""countryIS""#.utf8))
+        XCTAssertEqual(provider, .ipInfo)
+        XCTAssertEqual(String(data: try JSONEncoder().encode(provider), encoding: .utf8), #""ipInfo""#)
     }
 
     func testAlternativeProviderRetainsValidationAndSizeBounds() {

@@ -35,18 +35,55 @@ public struct NetworkSnapshot: Equatable, Sendable {
     public static let checking = NetworkSnapshot(connectivity: .checking)
 }
 
-/// This scaffold has no enforcement backend. No network result can promote it
-/// to "protected". Add new states only alongside a verified enforcement contract.
+/// Protection pauses Claude processes until a fresh egress observation matches the
+/// country explicitly trusted by the user.
 public enum ProtectionState: Equatable, Sendable {
     case notConfigured
+    case setupRequired(String)
+    case configuring(String)
+    case approvalRequired
+    case restartRequired
+    case channelEnabled
+    case countryConfirmed
+    case paused(String)
 
-    public var title: String { "Защита не настроена" }
-    public var symbol: String { "shield.slash" }
-    public var detail: String {
-        "Сетевая блокировка ещё не реализована. Приложение не ограничивает трафик."
+    public var title: String {
+        switch self {
+        case .notConfigured: return "Защита недоступна"
+        case .setupRequired: return "Нужно подключить защиту"
+        case .configuring: return "Включаем защиту…"
+        case .approvalRequired: return "Разрешите расширение macOS"
+        case .restartRequired: return "Перезагрузите Mac"
+        case .channelEnabled: return "Защита включена"
+        case .countryConfirmed: return "Контроль страны включён"
+        case .paused: return "Защита неактивна"
+        }
     }
-    public var canSafelyLaunch: Bool { false }
-    public var canPause: Bool { false }
+    public var symbol: String {
+        switch self {
+        case .channelEnabled: return "shield.fill"
+        case .countryConfirmed: return "shield.lefthalf.filled"
+        default: return "shield.slash"
+        }
+    }
+    /// Positive status feedback, not permission to claim a protected network route.
+    public var isOperational: Bool { self == .channelEnabled || self == .countryConfirmed }
+    public var detail: String {
+        switch self {
+        case .notConfigured:
+            return "Системный канал Claude не подключён. Проверка IP сама по себе не защищает соединения."
+        case .setupRequired(let message), .configuring(let message): return message
+        case .approvalRequired: return "Подтвердите Russian Armour в настройках сетевых расширений macOS."
+        case .restartRequired: return "macOS завершит установку расширения после перезагрузки."
+        case .channelEnabled:
+            return "Системный канал включён. Маршрут существующих соединений требует отдельной проверки."
+        case .countryConfirmed:
+            return "Смена сети, страны или сбой — пауза Claude. Данные могут уйти до паузы."
+        case .paused(let message): return message
+        }
+    }
+    public var canSafelyLaunch: Bool { self == .channelEnabled }
+    public var canPause: Bool { self == .channelEnabled }
 }
 
 public enum VPNLocation: String, CaseIterable, Codable, Sendable {
@@ -69,23 +106,26 @@ public struct AppPreferences: Equatable, Codable, Sendable {
     public var vpnLocation: VPNLocation
     public var automaticIPChecks: Bool
     public var egressProvider: EgressProvider
+    public var allowedCountryCode: String?
 
     public init(
         showInterfaceNames: Bool = true,
         recordNetworkEvents: Bool = true,
         vpnLocation: VPNLocation = .unspecified,
         automaticIPChecks: Bool = true,
-        egressProvider: EgressProvider = .ipWhoIS
+        egressProvider: EgressProvider = .ipWhoIS,
+        allowedCountryCode: String? = nil
     ) {
         self.showInterfaceNames = showInterfaceNames
         self.recordNetworkEvents = recordNetworkEvents
         self.vpnLocation = vpnLocation
         self.automaticIPChecks = automaticIPChecks
         self.egressProvider = egressProvider
+        self.allowedCountryCode = Self.validCountryCode(allowedCountryCode)
     }
 
     private enum CodingKeys: CodingKey {
-        case showInterfaceNames, recordNetworkEvents, vpnLocation, automaticIPChecks, egressProvider
+        case showInterfaceNames, recordNetworkEvents, vpnLocation, automaticIPChecks, egressProvider, allowedCountryCode
     }
 
     public init(from decoder: Decoder) throws {
@@ -95,6 +135,13 @@ public struct AppPreferences: Equatable, Codable, Sendable {
         vpnLocation = try values.decodeIfPresent(VPNLocation.self, forKey: .vpnLocation) ?? .unspecified
         automaticIPChecks = try values.decodeIfPresent(Bool.self, forKey: .automaticIPChecks) ?? true
         egressProvider = try values.decodeIfPresent(EgressProvider.self, forKey: .egressProvider) ?? .ipWhoIS
+        allowedCountryCode = Self.validCountryCode(try values.decodeIfPresent(String.self, forKey: .allowedCountryCode))
+    }
+
+    private static func validCountryCode(_ value: String?) -> String? {
+        guard let value, value.utf8.count == 2,
+              value.utf8.allSatisfy({ (65...90).contains($0) }) else { return nil }
+        return value
     }
 }
 

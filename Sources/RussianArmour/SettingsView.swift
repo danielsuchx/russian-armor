@@ -14,7 +14,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Russian Armour")
                         .font(.title2.weight(.semibold))
-                    Text("Версия 0.2.0 · диагностика подключения")
+                    Text("Claude Desktop и Claude Code")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -27,7 +27,7 @@ struct SettingsView: View {
                         .foregroundStyle(.orange)
                     Text(model.protection.detail)
                         .font(.callout)
-                    Text("VPN может работать на роутере или на Mac. Проверка внешнего IP не подтверждает маршрут других приложений. Файрвол и маршруты не изменяются.")
+                    Text("Russian Armour ставит Claude Desktop, Claude Code и их дочерние процессы на паузу, пока страна выхода не подтверждена.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -48,14 +48,32 @@ struct SettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("Определять IP и страну автоматически", isOn: $model.preferences.automaticIPChecks)
-                    .toggleStyle(.switch)
-                Picker("Сервис проверки IP", selection: $model.preferences.egressProvider) {
-                    ForEach(EgressProvider.allCases, id: \.self) { provider in
-                        Text(provider.title).tag(provider)
+                HStack {
+                    Text("Разрешённая страна VPN")
+                    Spacer()
+                    Text(model.preferences.allowedCountryCode ?? "Не выбрана")
+                        .foregroundStyle(model.preferences.allowedCountryCode == nil ? .orange : .secondary)
+                }
+                if model.preferences.allowedCountryCode != nil {
+                    Button("Выбрать заново") { model.clearAllowedCountry() }
+                }
+                if model.usesIndependentConfirmation {
+                    HStack {
+                        Text("Проверка IP")
+                        Spacer()
+                        Text("ipwho.is + IPinfo")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Picker("Сервис проверки IP", selection: $model.preferences.egressProvider) {
+                        ForEach(EgressProvider.allCases, id: \.self) { provider in
+                            Text(provider.title).tag(provider)
+                        }
                     }
                 }
-                Text("При запуске, изменении сети и пробуждении, затем примерно раз в минуту. \(model.preferences.egressProvider.host) получает внешний IP запроса. При ошибке повторяется запрос к тому же сервису — без переключения на другой.")
+                Text(model.usesIndependentConfirmation
+                     ? "При запуске, изменении сети и пробуждении, затем раз в минуту. Защита включается, только если оба сервиса видят один IP и страну."
+                     : "Разовая диагностика через \(model.preferences.egressProvider.host). Сервис получает внешний IP запроса.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -70,7 +88,7 @@ struct SettingsView: View {
 
             Divider()
             Label {
-                Text("Настройки и последние 100 событий — только на этом Mac. IP и страна остаются в памяти и не сохраняются в историю. Если отключить автопроверку, запросы выполняются только по кнопке с выбором сервиса.")
+                Text("Настройки и последние 100 событий — только на этом Mac. Сохраняется код разрешённой страны; IP остаётся в памяти и не записывается в историю.")
             } icon: {
                 Image(systemName: "internaldrive")
             }

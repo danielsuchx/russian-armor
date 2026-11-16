@@ -45,7 +45,7 @@ private final class EgressFixtureProtocol: URLProtocol {
             body = Data(repeating: 32, count: 4097)
         default:
             status = 200
-            body = url.host == EgressProvider.countryIS.host
+            body = url.host == EgressProvider.ipInfo.host
                 ? Data(#"{"ip":"2001:db8::7","country":"NL"}"#.utf8)
                 : Data(#"{"success":true,"ip":"2001:db8::7","country_code":"NL"}"#.utf8)
         }
@@ -85,7 +85,7 @@ final class EgressCheckerTests: XCTestCase {
     }
 
     func testTLSFailureDoesNotSendRequestToAlternativeProvider() async {
-        let (checker, id) = checker(provider: .countryIS, scenario: "tls")
+        let (checker, id) = checker(provider: .ipInfo, scenario: "tls")
         do {
             _ = try await checker.check()
             XCTFail("TLS failure was accepted")
@@ -93,7 +93,7 @@ final class EgressCheckerTests: XCTestCase {
             XCTAssertEqual((error as NSError).domain, NSURLErrorDomain)
             XCTAssertEqual((error as NSError).code, URLError.secureConnectionFailed.rawValue)
         }
-        XCTAssertEqual(EgressFixtureProtocol.takeRequests(id), [EgressProvider.countryIS.endpoint])
+        XCTAssertEqual(EgressFixtureProtocol.takeRequests(id), [EgressProvider.ipInfo.endpoint])
     }
 
     func testHTTPApplicationFailureAndUnknownLengthOversizeAreRejected() async {

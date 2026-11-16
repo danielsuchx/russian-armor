@@ -5,6 +5,7 @@ import Combine
 @MainActor
 final class NativeStatusMenu: NSObject, NSMenuDelegate {
     enum WindowKind: Hashable { case settings, history, readiness, traffic }
+    private static let statusBarSymbolSize: CGFloat = 18
 
     let menu = NSMenu()
     private let model: AppModel
@@ -16,6 +17,9 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
     private var checkIPItem: NSMenuItem!
     private var refreshItem: NSMenuItem!
     private var noteItem: NSMenuItem!
+    private(set) lazy var panel = StatusPanelController(model: model) { [weak self] action in
+        self?.performPanelAction(action)
+    }
 
     init(model: AppModel, createStatusItem: Bool = true, openWindow: @escaping (WindowKind) -> Void) {
         self.model = model
@@ -28,10 +32,13 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         buildMenu()
         if createStatusItem {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-            item.button?.image = symbol(model.protection.symbol, size: 15)
+            item.button?.image = symbol(model.protection.symbol, size: Self.statusBarSymbolSize)
             item.button?.imagePosition = .imageOnly
             item.button?.setAccessibilityLabel("Russian Armour — \(model.protection.title.lowercased())")
-            item.menu = menu
+            item.button?.toolTip = "Russian Armour · правый клик — все действия диагностики"
+            item.button?.target = self
+            item.button?.action = #selector(togglePanel(_:))
+            item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
             statusItem = item
         }
         subscription = Publishers.Merge(model.objectWillChange, model.traffic.objectWillChange)
@@ -67,7 +74,7 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         refreshItem.toolTip = "Локальная диагностика и сброс результата IP. Если включена автопроверка, внешний IP обновится автоматически после проверки сети."
         checkIPItem = action("Проверить IP и страну…", symbol: "globe", selector: #selector(confirmExternalCheck))
         action("Сетевые соединения…", symbol: "arrow.up.arrow.down", selector: #selector(showTraffic))
-        action("Что нужно для защиты?", symbol: "shield.lefthalf.filled", selector: #selector(showReadiness))
+        action(StatusPanelAction.readiness.title, symbol: "shield.lefthalf.filled", selector: #selector(showReadiness))
         menu.addItem(.separator())
         action("Настройки…", symbol: "gearshape", selector: #selector(showSettings), key: ",")
         action("Выйти из Russian Armour", symbol: "power", selector: #selector(quit), key: "q")
@@ -81,7 +88,12 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
 
     /// Update existing native menu items, preserving tracking and keyboard selection.
     func updateContents() {
-        statusItem?.button?.toolTip = "Russian Armour — \(model.protection.title.lowercased())"
+        menu.items.first?.title = model.protection.title
+        menu.items.first?.image = symbol(model.protection.symbol, size: 12)
+        menu.items.first?.toolTip = model.protection.detail
+        statusItem?.button?.image = symbol(model.protection.symbol, size: Self.statusBarSymbolSize)
+        statusItem?.button?.setAccessibilityLabel("Russian Armour — \(model.protection.title.lowercased())")
+        statusItem?.button?.toolTip = "Russian Armour — \(model.protection.title.lowercased()). Правый клик — все действия диагностики."
         var country = "Не проверена"
         var ip = "Не проверен"
         noteItem.toolTip = "Проверка внешнего выхода не доказывает защиту трафика Claude, браузера или всех соединений Mac. Для VPN на роутере локальный туннель не требуется."
@@ -91,7 +103,7 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         noteItem.image = nil
         switch model.externalCheck {
         case .notChecked:
-            if model.preferences.automaticIPChecks {
+            if model.automaticChecksEnabled {
                 noteItem.title = model.isSleeping ? "Автопроверка IP приостановлена" : "Автопроверка IP: ожидаем сеть"
                 noteItem.toolTip = "Автоматический запрос к \(model.preferences.egressProvider.host) после подключения к сети. Отключить можно в настройках."
             } else {
@@ -104,8 +116,8 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         case .observed(let value):
             country = "\(value.countryCode) (\(value.countryName))"
             ip = value.ip
-            noteItem.title = model.preferences.automaticIPChecks
-                ? "\(value.provider.title) · автообновление IP"
+            noteItem.title = model.automaticChecksEnabled
+                ? "\(model.usesIndependentConfirmation ? "2 сервиса" : value.provider.title) · автообновление IP"
                 : "\(value.provider.title) · только запрос проверки"
         case .failed(let message):
             country = "Ошибка проверки"
@@ -117,7 +129,7 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
             noteItem.target = self
             noteItem.isEnabled = true
         case .needsRecheck(let message):
-            noteItem.title = model.preferences.automaticIPChecks
+            noteItem.title = model.automaticChecksEnabled
                 ? (model.isSleeping ? "Автопроверка IP приостановлена" : "Автопроверка IP: ожидаем сеть")
                 : "Результат сброшен — повторите проверку"
             noteItem.toolTip = message
@@ -128,8 +140,10 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         fields["IP"]?.title = "IP: \(ip)"
         fields["IPv6"]?.title = "IPv6: утечки не проверены"
         fields["Claude"]?.title = "Claude: \(model.diagnostics.claudeDesktop.title.lowercased())"
-        fields["Claude"]?.toolTip = "Только Claude Desktop. Не сессии Code и не проверка его маршрута."
-        fields["Защита"]?.title = "Защита: трафик не блокируется"
+        fields["Claude"]?.toolTip = "Защита охватывает Claude Desktop, распознанный Claude Code и их дочерние процессы текущего пользователя."
+        fields["Защита"]?.title = model.protection == .notConfigured
+            ? "Защита: трафик не блокируется" : "Защита: \(model.protection.title.lowercased())"
+        fields["Защита"]?.toolTip = model.protection.detail
         fields["Соединения"]?.title = "Соединения: \(model.traffic.state.title)"
         fields["Соединения"]?.toolTip = "Только сокеты текущего пользователя. Не полный журнал пакетов и не проверка VPN-маршрута."
         let events = model.journal.events
@@ -149,12 +163,12 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         refreshItem.isEnabled = !model.isSleeping
         checkIPItem.isEnabled = !model.externalCheck.isChecking && !model.isSleeping
         checkIPItem.title = model.externalCheck.isChecking ? "Проверяем IP и страну…"
-            : (model.preferences.automaticIPChecks ? "Обновить IP и страну" : "Проверить IP и страну…")
+            : (model.automaticChecksEnabled ? "Обновить IP и страну" : "Проверить IP и страну…")
     }
 
     private var vpnExplanation: String {
         if model.preferences.vpnLocation == .router {
-            return "Указано вами. Для VPN на роутере приложение или utun на Mac не нужны. Работа VPN не подтверждена."
+            return "Указано вами. Безопасность определяется свежей проверкой разрешённой страны выхода."
         }
         if model.preferences.vpnLocation == .thisMac {
             let names = model.diagnostics.tunnels.interfaceNames
@@ -200,6 +214,32 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         return image
     }
 
+    @objc private func togglePanel(_ sender: NSStatusBarButton) {
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            panel.close()
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY), in: sender)
+        } else {
+            model.refreshDiagnostics()
+            panel.toggle(relativeTo: sender)
+        }
+    }
+
+    func performPanelAction(_ action: StatusPanelAction) {
+        // Also enforce disabled actions at the controller boundary, not just visually.
+        guard !action.requiresEnforcement else { return }
+        panel.close()
+        switch action {
+        case .history: showHistory()
+        case .refresh: refresh()
+        case .settings: showSettings()
+        case .quit: quit()
+        case .readiness: showReadiness()
+        case .checkIP: confirmExternalCheck()
+        case .failureDetails: showExternalFailure()
+        case .launchClaude, .closeClaude, .pause15, .pause60: break
+        }
+    }
+
     @objc private func refresh() { model.refresh() }
     @objc private func showHistory() { openWindow(.history) }
     @objc private func showTraffic() { openWindow(.traffic) }
@@ -209,7 +249,7 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
 
     @objc private func confirmExternalCheck() {
         guard !model.externalCheck.isChecking, !model.isSleeping else { return }
-        if model.preferences.automaticIPChecks {
+        if model.automaticChecksEnabled {
             model.refreshExternalIP()
             return
         }
@@ -224,10 +264,10 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
     static func externalCheckConsentAlert() -> NSAlert {
         let alert = NSAlert()
         alert.messageText = "Через какой сервис проверить IP?"
-        alert.informativeText = "Будет отправлен один HTTPS-запрос только к выбранному сервису: ipwho.is или api.country.is. Он увидит IP запроса и вернёт адрес и оценку страны. Это не проверка маршрута Claude или всех соединений Mac. IP и страна не сохраняются в историю. Автоматических повторов и переключения между сервисами нет."
+        alert.informativeText = "Будет отправлен один HTTPS-запрос только к выбранному сервису: ipwho.is или ipinfo.io. Он увидит IP запроса и вернёт адрес и оценку страны. Это не проверка маршрута Claude или всех соединений Mac. IP и страна не сохраняются в историю. Автоматических повторов и переключения между сервисами нет."
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Через ipwho.is")
-        alert.addButton(withTitle: "Через Country.is")
+        alert.addButton(withTitle: "Через IPinfo")
         alert.addButton(withTitle: "Отмена").keyEquivalent = "\u{1b}"
         return alert
     }
@@ -235,7 +275,7 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
     static func confirmedProvider(for response: NSApplication.ModalResponse) -> EgressProvider? {
         switch response {
         case .alertFirstButtonReturn: return .ipWhoIS
-        case .alertSecondButtonReturn: return .countryIS
+        case .alertSecondButtonReturn: return .ipInfo
         default: return nil
         }
     }
@@ -250,8 +290,8 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         guard case .failed(let message) = model.externalCheck else { return nil }
         let alert = NSAlert()
         alert.messageText = "Не удалось определить внешний IP"
-        let nextStep = model.preferences.automaticIPChecks
-            ? "IP и страна неизвестны. При доступной сети автопроверка повторится примерно через минуту через \(model.preferences.egressProvider.title). Для смены сервиса или отключения автопроверки откройте настройки."
+        let nextStep = model.automaticChecksEnabled
+            ? "IP и страна неизвестны. При доступной сети автопроверка повторится примерно через минуту\(model.usesIndependentConfirmation ? " через два независимых сервиса." : " через \(model.preferences.egressProvider.title). Для смены сервиса откройте настройки.")"
             : "IP и страна неизвестны. Можно повторить проверку через другой сервис: закройте это окно и нажмите «Проверить IP и страну…». Новый запрос выполняется только после выбора сервиса."
         alert.informativeText = "\(model.externalProvider.title): \(message)\n\n\(nextStep)"
         alert.alertStyle = .warning

@@ -30,10 +30,11 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertEqual(preferences.vpnLocation, .unspecified)
         XCTAssertTrue(preferences.automaticIPChecks)
         XCTAssertEqual(preferences.egressProvider, .ipWhoIS)
+        XCTAssertNil(preferences.allowedCountryCode)
     }
 
     func testAutomaticCheckPreferencesRoundTripPreservesOptOutAndProvider() throws {
-        let preferences = AppPreferences(vpnLocation: .router, automaticIPChecks: false, egressProvider: .countryIS)
+        let preferences = AppPreferences(vpnLocation: .router, automaticIPChecks: false, egressProvider: .ipInfo)
         let restored = try JSONDecoder().decode(AppPreferences.self, from: JSONEncoder().encode(preferences))
         XCTAssertEqual(restored, preferences)
     }
@@ -49,8 +50,15 @@ final class DiagnosticsTests: XCTestCase {
     }
 
     func testRouterPreferenceRoundTrip() throws {
-        let preferences = AppPreferences(vpnLocation: .router)
+        let preferences = AppPreferences(vpnLocation: .router, allowedCountryCode: "NL")
         XCTAssertEqual(try JSONDecoder().decode(AppPreferences.self, from: JSONEncoder().encode(preferences)), preferences)
+    }
+
+    func testMalformedStoredCountryIsRejected() throws {
+        for country in ["nl", "NLD", "N1", ""] {
+            let data = Data("{\"allowedCountryCode\":\"\(country)\"}".utf8)
+            XCTAssertNil(try JSONDecoder().decode(AppPreferences.self, from: data).allowedCountryCode)
+        }
     }
 
     func testIPv4Response() throws {

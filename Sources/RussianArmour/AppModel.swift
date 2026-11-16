@@ -5,8 +5,26 @@ import Foundation
 
 @MainActor
 final class AppModel: ObservableObject {
-    let protection = ProtectionState.notConfigured
+    let processProtection: ProcessProtectionController?
+    var protection: ProtectionState {
+        guard let processProtection else { return .notConfigured }
+        switch processProtection.status {
+        case .checking(let count):
+            return .configuring("Проверяем страну выхода. На паузе процессов Claude: \(count).")
+        case .needsAllowedCountry(let current, let count):
+            let currentText = current.map { " Сейчас определена страна \($0)." } ?? ""
+            return .setupRequired("Выберите разрешённую страну VPN.\(currentText) На паузе процессов: \(count).")
+        case .active:
+            return .countryConfirmed
+        case .paused(let reason, let count):
+            return .paused("\(reason) На паузе процессов: \(count).")
+        case .failed(let message):
+            return .paused(message)
+        }
+    }
     let traffic: TrafficMonitor
+    var automaticChecksEnabled: Bool { preferences.automaticIPChecks || processProtection != nil }
+    var usesIndependentConfirmation: Bool { processProtection != nil }
     @Published private(set) var network = NetworkSnapshot.checking
     @Published private(set) var diagnostics = LocalDiagnosticsSnapshot.notChecked
     @Published private(set) var externalCheck = ExternalCheckState.notChecked
@@ -26,6 +44,9 @@ final class AppModel: ObservableObject {
                 invalidateExternalCheck("Способ подключения изменился. Нужна новая проверка IP.")
                 traffic.refresh()
             }
+            if oldValue.allowedCountryCode != preferences.allowedCountryCode {
+                applyProtectionPolicy()
+            }
             if automaticSettingsChanged || oldValue.vpnLocation != preferences.vpnLocation {
                 requestAutomaticExternalCheckIfNeeded()
             }
@@ -40,6 +61,7 @@ final class AppModel: ObservableObject {
     }
     private let defaults: UserDefaults
     private let observer = NetworkObserver()
+    private let routeObserver = RouteChangeObserver()
     private let startsMonitoring: Bool
     private let diagnosticsReader: @MainActor () -> LocalDiagnosticsSnapshot
     private var subscriptions = Set<AnyCancellable>()
@@ -47,8 +69,9 @@ final class AppModel: ObservableObject {
     private var lastAvailableInterfaces: [String]?
     private var lastTunnels: TunnelObservation?
     private var externalTask: Task<Void, Never>?
+    private var protectionObservation: EgressObservation?
     private var externalGeneration = UUID()
-    private static let externalCheckInterval: TimeInterval = 60
+    private let externalCheckInterval: TimeInterval = 60
     private var nextAutomaticCheckAt = Date.distantPast
     private let now: () -> Date
     private let automaticCheckDelay: UInt64
@@ -61,7 +84,8 @@ final class AppModel: ObservableObject {
         automaticCheckDelay: UInt64 = 1_000_000_000,
         diagnosticsReader: @escaping @MainActor () -> LocalDiagnosticsSnapshot = { LocalDiagnosticsReader.read() },
         egressReader: @escaping (EgressProvider) async throws -> EgressObservation = { provider in try await EgressChecker(provider: provider).check() },
-        trafficReader: @escaping TrafficMonitor.Reader = { try await SocketTrafficReader.snapshot() }
+        trafficReader: @escaping TrafficMonitor.Reader = { try await SocketTrafficReader.snapshot() },
+        processProtection: ProcessProtectionController? = nil
     ) {
         traffic = TrafficMonitor(reader: trafficReader)
         self.defaults = defaults
@@ -72,19 +96,32 @@ final class AppModel: ObservableObject {
         self.egressReader = egressReader
         preferences = Self.load(AppPreferences.self, from: defaults, key: Keys.preferences)
             ?? AppPreferences()
+        self.processProtection = processProtection ?? (startsMonitoring ? ProcessProtectionController() : nil)
         journal = Self.load(EventJournal.self, from: defaults, key: Keys.journal)
             ?? EventJournal()
         externalProvider = preferences.egressProvider
 
+        self.processProtection?.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &subscriptions)
+
         observer.onUpdate = { [weak self] snapshot in self?.receive(snapshot) }
-        record("Russian Armour запущен", detail: "Локальная диагностика включена. Трафик не блокируется.")
+        routeObserver.onChange = { [weak self] in self?.receiveRouteChange() }
+        record("Russian Armour запущен", detail: "Claude остаётся на паузе до проверки разрешённой страны выхода.")
+        if preferences.allowedCountryCode == nil { self.processProtection?.requireCountry() }
         refreshDiagnostics()
         if startsMonitoring {
             observeWorkspace()
             observer.refresh()
+            routeObserver.start()
             Timer.publish(every: 10, on: .main, in: .common)
                 .autoconnect()
                 .sink { [weak self] _ in self?.refreshDiagnostics() }
+                .store(in: &subscriptions)
+            Timer.publish(every: 1, on: .main, in: .common)
+                .autoconnect()
+                .sink { [weak self] _ in self?.expireExternalCheck() }
                 .store(in: &subscriptions)
         }
     }
@@ -117,7 +154,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Manual checks remain available even when automatic checks are disabled.
-    func checkExternalIPAfterConsent(provider: EgressProvider = .countryIS) {
+    func checkExternalIPAfterConsent(provider: EgressProvider = .ipInfo) {
         beginExternalCheck(provider: provider)
     }
 
@@ -126,7 +163,7 @@ final class AppModel: ObservableObject {
     }
 
     private func requestAutomaticExternalCheckIfNeeded() {
-        guard preferences.automaticIPChecks, !isSleeping,
+        guard automaticChecksEnabled, !isSleeping,
               network.connectivity == .available,
               now() >= nextAutomaticCheckAt else { return }
         beginExternalCheck(provider: preferences.egressProvider, delay: automaticCheckDelay, recordsResult: false)
@@ -139,23 +176,47 @@ final class AppModel: ObservableObject {
         externalProvider = provider
         externalCheck = .checking
         let read = egressReader
+        let requiresConsensus = usesIndependentConfirmation
         externalTask = Task { [weak self] in
             do {
                 if delay > 0 { try await Task.sleep(nanoseconds: delay) }
                 try Task.checkCancellation()
-                let observation = try await read(provider)
+                let observation: EgressObservation
+                let policyObservation: EgressObservation
+                if requiresConsensus {
+                    let first: EgressObservation
+                    let second: EgressObservation
+                    do {
+                        first = try await read(provider)
+                        second = try await read(provider.alternate)
+                    } catch {
+                        throw EgressError.independentConfirmationFailed
+                    }
+                    guard first.provider == provider else { throw EgressError.invalidResponse }
+                    guard second.provider == provider.alternate else { throw EgressError.invalidResponse }
+                    observation = try EgressConsensus.confirm(first, second)
+                    policyObservation = first.provider == .ipWhoIS ? first : second
+                } else {
+                    observation = try await read(provider)
+                    policyObservation = observation
+                }
                 guard !Task.isCancelled, let self, self.externalGeneration == generation else { return }
                 guard observation.provider == provider else { throw EgressError.invalidResponse }
-                self.externalCheck = .observed(observation)
-                self.nextAutomaticCheckAt = self.now().addingTimeInterval(Self.externalCheckInterval)
+                self.protectionObservation = policyObservation
+                self.externalCheck = .observed(policyObservation)
+                self.processProtection?.apply(policyObservation, allowedCountryCode: self.preferences.allowedCountryCode)
+                self.nextAutomaticCheckAt = self.now().addingTimeInterval(self.externalCheckInterval)
                 if recordsResult {
-                    self.record("Внешний выход проверен", detail: "Только запрос Russian Armour к \(provider.title). IP и страна в историю не записываются.")
+                    let services = requiresConsensus ? "ipwho.is и IPinfo" : provider.title
+                    self.record("Внешний выход проверен", detail: "Запросы Russian Armour к \(services). IP и страна в историю не записываются.")
                 }
                 self.externalTask = nil
             } catch {
                 guard !Task.isCancelled, let self, self.externalGeneration == generation else { return }
+                self.protectionObservation = nil
                 self.externalCheck = .failed(EgressError.safeMessage(for: error))
-                self.nextAutomaticCheckAt = self.now().addingTimeInterval(Self.externalCheckInterval)
+                self.processProtection?.pause("Не удалось подтвердить безопасный выход.")
+                self.nextAutomaticCheckAt = self.now().addingTimeInterval(self.externalCheckInterval)
                 if recordsResult {
                     self.record("Не удалось проверить внешний выход", detail: "IP и страна неизвестны.", kind: .warning)
                 }
@@ -165,14 +226,21 @@ final class AppModel: ObservableObject {
     }
 
     func expireExternalCheck(now date: Date? = nil) {
+        // A scheduled refresh must not suspend a healthy Claude session before
+        // there is evidence that the route became unsafe. Real network/tunnel
+        // changes still call invalidateExternalCheck and fail closed immediately.
+        // A mismatched or failed refresh pauses protection in the task result.
         if case .observed(let observation) = externalCheck,
-           (date ?? now()).timeIntervalSince(observation.checkedAt) >= Self.externalCheckInterval {
+           (date ?? now()).timeIntervalSince(observation.checkedAt) >= externalCheckInterval,
+           processProtection == nil {
             invalidateExternalCheck("Результат устарел. Нужна новая проверка IP.")
         }
         requestAutomaticExternalCheckIfNeeded()
     }
 
     private func invalidateExternalCheck(_ reason: String) {
+        protectionObservation = nil
+        processProtection?.pause(reason)
         externalGeneration = UUID()
         externalTask?.cancel()
         externalTask = nil
@@ -191,13 +259,15 @@ final class AppModel: ObservableObject {
     }
 
     func prepareForSleep() {
+        processProtection?.pause("Mac переходит в сон. Ждём свежую проверку после пробуждения.")
         traffic.prepareForSleep()
         isSleeping = true
         invalidateExternalCheck("Mac проснулся или засыпает. Нужна новая проверка IP.")
         observer.suspend()
+        routeObserver.stop()
         network = .checking
         diagnostics = .notChecked
-        record("Mac переходит в сон", detail: "Диагностика приостановлена. Сетевая защита не включена.", kind: .sleep)
+        record("Mac переходит в сон", detail: "Диагностика приостановлена. Настройки системного канала сохраняются.", kind: .sleep)
     }
 
     func resumeAfterWake() {
@@ -206,7 +276,10 @@ final class AppModel: ObservableObject {
         network = .checking
         record("Mac проснулся", detail: "Заново проверяем локальное состояние. Это не проверка сетевой защиты.", kind: .wake)
         refreshDiagnostics()
-        if startsMonitoring { observer.refresh() }
+        if startsMonitoring {
+            observer.refresh()
+            routeObserver.start()
+        }
     }
 
     /// Shared boundary for NWPathMonitor updates and deterministic lifecycle tests.
@@ -230,6 +303,17 @@ final class AppModel: ObservableObject {
         refreshDiagnostics()
     }
 
+    private func receiveRouteChange() {
+        guard !isSleeping else { return }
+        invalidateExternalCheck("Сетевой маршрут или адрес изменился. Нужна новая проверка IP.")
+        traffic.refresh()
+        refreshDiagnostics()
+        observer.refresh()
+        if preferences.recordNetworkEvents {
+            record("Сетевой маршрут изменился", detail: "Claude остаётся на паузе до свежей проверки страны.", kind: .network)
+        }
+    }
+
     private func observeWorkspace() {
         let notifications = NSWorkspace.shared.notificationCenter
         notifications.publisher(for: NSWorkspace.willSleepNotification)
@@ -248,9 +332,46 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func trustCurrentCountry() {
+        guard let observation = currentObservation else { return }
+        preferences.allowedCountryCode = observation.countryCode
+        record("Разрешена страна VPN", detail: "Claude продолжит работу только после свежей проверки страны \(observation.countryCode).")
+    }
+
+    func clearAllowedCountry() {
+        preferences.allowedCountryCode = nil
+        processProtection?.requireCountry(currentCountryCode: currentObservation?.countryCode)
+    }
+
+    func shutdownProtection() {
+        processProtection?.shutdown()
+    }
+
+    private var currentObservation: EgressObservation? {
+        guard case .observed(let observation) = externalCheck else { return nil }
+        return processProtection == nil ? observation : protectionObservation
+    }
+
+    private func applyProtectionPolicy() {
+        guard let processProtection else { return }
+        guard let allowed = preferences.allowedCountryCode else {
+            processProtection.requireCountry(currentCountryCode: currentObservation?.countryCode)
+            return
+        }
+        if let observation = currentObservation {
+            processProtection.apply(observation, allowedCountryCode: allowed)
+        } else {
+            processProtection.pause("Ждём свежую проверку страны выхода.")
+        }
+    }
+
     private func record(_ title: String, detail: String = "", kind: ActivityEvent.Kind = .information) {
         journal.record(ActivityEvent(kind: kind, title: title, detail: detail))
         save(journal, forKey: Keys.journal)
+    }
+
+    func recordWatchdogError(_ title: String, detail: String) {
+        record(title, detail: detail, kind: .warning)
     }
 
     private func save<T: Encodable>(_ value: T, forKey key: String) {

@@ -1,64 +1,66 @@
-import ArmourCore
 import SwiftUI
 
 struct ReadinessView: View {
     @EnvironmentObject private var model: AppModel
+    var openSettings: () -> Void
+    var close: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Label("Что нужно для защиты", systemImage: "shield.lefthalf.filled")
+            Text("Защита Claude")
                 .font(.title2.weight(.semibold))
-            Text("Сейчас работает диагностика. Включить блокировку трафика в этой версии нельзя — это не ошибка настройки и не отсутствие разрешений.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 18) {
-                step(
-                    symbol: "network",
-                    title: "Локальная диагностика",
-                    status: model.diagnostics.checkedAt == nil ? "Ожидает проверки" : "Доступна",
-                    detail: "Показывает доступность сети, интерфейсы utun и состояние Claude Desktop. Не подтверждает маршрут трафика."
-                )
-                Divider()
-                step(
-                    symbol: "point.topleft.down.to.point.bottomright.curvepath",
-                    title: "Проверка внешнего выхода",
-                    status: model.preferences.automaticIPChecks ? "Автоматически · \(model.preferences.egressProvider.title)" : "По кнопке · автопроверка выключена",
-                    detail: "Работает и с VPN на роутере. Выбранный сервис (ipwho.is или Country.is) возвращает IP и оценку страны запроса Russian Armour. Это не подтверждает маршрут Claude, всех соединений Mac или сам факт VPN."
-                )
-                Divider()
-                step(
-                    symbol: "shield.slash",
-                    title: "Сетевая блокировка",
-                    status: "Ещё не реализована",
-                    detail: "Нужен отдельный механизм macOS, проверенный при отключении VPN, смене сети, сне и сбое приложения."
+                explanation(title: model.protection.title, detail: model.protection.detail,
+                            symbol: model.protection.symbol,
+                            color: model.protection.isOperational ? .green : .orange)
+
+                if model.preferences.allowedCountryCode == nil,
+                   case .observed(let observation) = model.externalCheck {
+                    Button("Разрешить страну \(observation.countryCode)") {
+                        model.trustCurrentCountry()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("protection-trust-country")
+                }
+
+                explanation(
+                    title: "Проверяет IP и страну",
+                    detail: "При запуске, смене сети и раз в минуту. Плановая проверка идёт в фоне; Claude ставится на паузу при смене сети, ошибке или несовпадении страны.",
+                    symbol: "globe",
+                    color: .secondary
                 )
             }
-            .padding(16)
-            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
 
-            Label("Безопасный запуск и пауза появятся после реализации и проверки защиты.", systemImage: "info.circle")
+            Text("Защита работает на уровне процессов. Между изменением сети и паузой возможен короткий промежуток; для строгой блокировки включите также kill switch VPN.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button("Настройки…", action: openSettings)
+                    .accessibilityIdentifier("readiness-settings")
+                Spacer()
+                Button("Понятно", action: close)
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("readiness-close")
+            }
         }
         .padding(24)
-        .frame(width: 510)
+        .frame(width: 460)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func step(symbol: String, title: String, status: String, detail: String) -> some View {
+    private func explanation(title: String, detail: String, symbol: String, color: Color) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: symbol)
-                .font(.system(size: 18))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 20))
+                .foregroundStyle(color)
                 .frame(width: 24)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(title)
                     .font(.headline)
-                Text(status)
-                    .font(.caption.weight(.medium))
                 Text(detail)
                     .font(.callout)
                     .foregroundStyle(.secondary)

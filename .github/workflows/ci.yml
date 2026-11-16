@@ -1,0 +1,27 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test Swift code and certificate validation
+        run: swift test
+      - name: Test router configuration preparation
+        run: python3 -B -m unittest discover -s scripts/tests -v
+      - name: Test signing and CMS validation
+        run: python3 -B scripts/test_protection_signing.py
+      - name: Check bundle metadata
+        run: |
+          bash -n scripts/build-app.sh scripts/build-protected-app.sh
+          plutil -lint Support/Info.plist Support/Protection/ProxyInfo.plist Support/Protection/App.entitlements Support/Protection/Proxy.entitlements
+      - name: Build diagnostic development app
+        run: bash scripts/build-app.sh

@@ -5,17 +5,53 @@ import XCTest
 final class ArmourCoreTests: XCTestCase {
     func testScaffoldNeverClaimsProtection() {
         let protection = ProtectionState.notConfigured
-        XCTAssertEqual(protection.title, "Защита не настроена")
+        XCTAssertEqual(protection.title, "Защита недоступна")
         XCTAssertFalse(protection.canSafelyLaunch)
         XCTAssertFalse(protection.canPause)
         XCTAssertEqual(protection.symbol, "shield.slash")
+    }
+
+    func testCountryMonitorHasPositiveButDistinctFeedbackWithoutClaimingNetworkProtection() {
+        let monitor = ProtectionState.countryConfirmed
+        XCTAssertEqual(monitor.title, "Контроль страны включён")
+        XCTAssertEqual(monitor.symbol, "shield.lefthalf.filled")
+        XCTAssertTrue(monitor.isOperational)
+        XCTAssertFalse(monitor.canSafelyLaunch)
+        XCTAssertFalse(monitor.canPause)
+        XCTAssertTrue(monitor.detail.contains("Смена сети, страны или сбой"))
+        XCTAssertTrue(monitor.detail.contains("пауза Claude"))
+        XCTAssertTrue(monitor.detail.contains("Данные могут уйти до паузы"))
+        XCTAssertEqual(ProtectionState.channelEnabled.symbol, "shield.fill")
+        XCTAssertTrue(ProtectionState.channelEnabled.canSafelyLaunch)
+    }
+
+    func testPausedProtectionUsesInactiveTitleAndPreservesTheReason() {
+        let reason = "Выход через RU, разрешена страна SE. На паузе процессов: 4."
+        let state = ProtectionState.paused(reason)
+        XCTAssertEqual(state.title, "Защита неактивна")
+        XCTAssertEqual(state.detail, reason)
+        XCTAssertEqual(state.symbol, "shield.slash")
+        XCTAssertFalse(state.isOperational)
+        XCTAssertFalse(state.canSafelyLaunch)
+    }
+
+    func testOnlyConfirmedOrEnabledStatesReceivePositiveFeedback() {
+        let warnings: [ProtectionState] = [
+            .notConfigured, .setupRequired("Выберите страну"), .configuring("Проверяем"),
+            .approvalRequired, .restartRequired, .paused("Ошибка проверки")
+        ]
+        for state in warnings {
+            XCTAssertFalse(state.isOperational)
+            XCTAssertEqual(state.symbol, "shield.slash")
+        }
+        XCTAssertTrue(ProtectionState.channelEnabled.isOperational)
     }
 
     func testConnectivityDoesNotChangeProtectionState() {
         for state in [Connectivity.checking, .available, .requiresConnection, .unavailable] {
             let snapshot = NetworkSnapshot(connectivity: state)
             XCTAssertEqual(snapshot.connectivity, state)
-            XCTAssertEqual(ProtectionState.notConfigured.title, "Защита не настроена")
+            XCTAssertEqual(ProtectionState.notConfigured.title, "Защита недоступна")
         }
     }
 

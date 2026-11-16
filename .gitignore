@@ -4,3 +4,8 @@
 dist/
 *.xcuserstate
 xcuserdata/
+__pycache__/
+*.provisionprofile
+*.mobileprovision
+*.p12
+*.armour.json

@@ -21,7 +21,7 @@ final class AutomaticEgressTests: XCTestCase {
     }
 
     private func response(_ provider: EgressProvider, at date: Date) throws -> EgressObservation {
-        let json = provider == .countryIS
+        let json = provider == .ipInfo
             ? #"{"ip":"203.0.113.7","country":"NL"}"#
             : #"{"success":true,"ip":"203.0.113.8","country_code":"DE"}"#
         return try EgressObservation.decode(Data(json.utf8), provider: provider, checkedAt: date)
@@ -122,7 +122,7 @@ final class AutomaticEgressTests: XCTestCase {
     }
 
     func testDisabledPolicyStaysDisabledAcrossNetworkWakeAndRestartButAllowsManualCheck() async throws {
-        let defaults = try storage(AppPreferences(automaticIPChecks: false, egressProvider: .countryIS))
+        let defaults = try storage(AppPreferences(automaticIPChecks: false, egressProvider: .ipInfo))
         let date = Date()
         var requests: [EgressProvider] = []
         let model = AppModel(defaults: defaults, startsMonitoring: false, automaticCheckDelay: 0,
@@ -140,10 +140,10 @@ final class AutomaticEgressTests: XCTestCase {
         XCTAssertTrue(requests.isEmpty)
         model.refreshExternalIP()
         await settle(model)
-        XCTAssertEqual(requests, [.countryIS])
+        XCTAssertEqual(requests, [.ipInfo])
         let restored = AppModel(defaults: defaults, startsMonitoring: false, diagnosticsReader: { .notChecked })
         XCTAssertFalse(restored.preferences.automaticIPChecks)
-        XCTAssertEqual(restored.preferences.egressProvider, .countryIS)
+        XCTAssertEqual(restored.preferences.egressProvider, .ipInfo)
         XCTAssertEqual(restored.externalCheck, .notChecked)
     }
 
@@ -217,15 +217,15 @@ final class AutomaticEgressTests: XCTestCase {
         model.receive(NetworkSnapshot(connectivity: .available))
         await waitForRequest { pending != nil }
         let continuation = try XCTUnwrap(pending)
-        model.preferences.egressProvider = .countryIS
+        model.preferences.egressProvider = .ipInfo
         await settle(model)
         continuation.resume(returning: try response(.ipWhoIS, at: date))
         for _ in 0..<10 { await Task.yield() }
-        XCTAssertEqual(requests, [.ipWhoIS, .countryIS])
-        XCTAssertEqual(model.externalCheck, .observed(try response(.countryIS, at: date)))
-        XCTAssertEqual(model.externalProvider, .countryIS)
+        XCTAssertEqual(requests, [.ipWhoIS, .ipInfo])
+        XCTAssertEqual(model.externalCheck, .observed(try response(.ipInfo, at: date)))
+        XCTAssertEqual(model.externalProvider, .ipInfo)
         let restored = AppModel(defaults: defaults, startsMonitoring: false, diagnosticsReader: { .notChecked })
-        XCTAssertEqual(restored.preferences.egressProvider, .countryIS)
+        XCTAssertEqual(restored.preferences.egressProvider, .ipInfo)
         XCTAssertTrue(restored.preferences.automaticIPChecks)
         XCTAssertEqual(restored.externalCheck, .notChecked)
     }

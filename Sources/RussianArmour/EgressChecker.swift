@@ -7,7 +7,7 @@ struct EgressChecker {
     private let provider: EgressProvider
     private let session: URLSession
 
-    init(provider: EgressProvider = .countryIS, configuration: URLSessionConfiguration = .ephemeral) {
+    init(provider: EgressProvider = .ipInfo, configuration: URLSessionConfiguration = .ephemeral) {
         self.provider = provider
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil

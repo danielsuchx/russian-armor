@@ -1,0 +1,295 @@
+import Darwin
+import Foundation
+import XCTest
+import ArmourCore
+@testable import RussianArmour
+
+@MainActor
+final class ProcessProtectionControllerTests: XCTestCase {
+    private func identity(_ pid: pid_t, start: UInt64 = 1) -> ProtectedProcessIdentity {
+        .init(pid: pid, startSeconds: start, startMicroseconds: 0)
+    }
+
+    private func record(_ pid: pid_t, parent: pid_t = 1, path: String,
+                        name: String? = nil, desktop: Bool = false, npmClaude: Bool = false,
+                        start: UInt64 = 1) -> ProtectedProcessRecord {
+        .init(identity: identity(pid, start: start), parentPID: parent,
+              executablePath: path, processName: name ?? URL(fileURLWithPath: path).lastPathComponent,
+              isClaudeDesktopRoot: desktop, isClaudeCodeInterpreter: npmClaude)
+    }
+
+    private func observation(_ country: String) throws -> EgressObservation {
+        try EgressObservation.decode(
+            Data(#"{"ip":"203.0.113.7","country":"\#(country)"}"#.utf8),
+            checkedAt: Date(timeIntervalSince1970: 1)
+        )
+    }
+
+    func testCatalogSelectsDesktopCodeAndAllDescendants() {
+        let records = [
+            record(10, path: "/Applications/Claude.app/Contents/MacOS/Claude", desktop: true),
+            record(11, parent: 10, path: "/Applications/Claude.app/Contents/Frameworks/helper"),
+            record(12, parent: 11, path: "/usr/bin/git"),
+            record(20, path: "/Users/test/.local/bin/claude"),
+            record(21, parent: 20, path: "/bin/zsh"),
+            record(22, path: "/Users/test/.local/share/claude/versions/2.1.325", name: "2.1.325"),
+            record(30, path: "/usr/bin/node"),
+            record(31, path: "/opt/homebrew/bin/node", npmClaude: true),
+            record(32, parent: 31, path: "/usr/bin/git")
+        ]
+        let selected = Set(ProtectedProcessCatalog.protectedRecords(from: records).map(\.identity.pid))
+        XCTAssertEqual(selected, [10, 11, 12, 20, 21, 22, 31, 32])
+    }
+
+    func testStartsFailClosedAndResumesOnlyAfterAllowedCountry() throws {
+        let target = record(42, path: "/usr/local/bin/claude")
+        var liveIdentity: ProtectedProcessIdentity? = target.identity
+        var signals: [(pid_t, Int32)] = []
+        let controller = ProcessProtectionController(
+            automaticallyMonitor: false,
+            processReader: { [target] },
+            identityReader: { _ in liveIdentity },
+            signaler: { signals.append(($0, $1)); return 0 }
+        )
+        XCTAssertEqual(signals.map(\.1), [SIGSTOP])
+
+        controller.apply(try observation("DE"), allowedCountryCode: "NL")
+        XCTAssertEqual(signals.map(\.1), [SIGSTOP])
+        guard case .paused = controller.status else { return XCTFail("Mismatched country must stay paused") }
+
+        controller.apply(try observation("NL"), allowedCountryCode: "NL")
+        XCTAssertEqual(signals.map(\.1), [SIGSTOP, SIGCONT])
+        XCTAssertTrue(controller.suspended.isEmpty)
+        guard case .active("NL", _) = controller.status else { return XCTFail("Allowed country must resume") }
+
+        controller.pause("Сеть изменилась")
+        XCTAssertEqual(signals.map(\.1), [SIGSTOP, SIGCONT, SIGSTOP])
+        liveIdentity = nil
+        controller.shutdown()
+        XCTAssertEqual(signals.map(\.1), [SIGSTOP, SIGCONT, SIGSTOP], "Exited or reused PID must not receive SIGCONT")
+    }
+
+    func testFailedResumeRetainsIdentityAndRetries() throws {
+        let target = record(51, path: "/usr/local/bin/claude")
+        var attempts = 0
+        let controller = ProcessProtectionController(
+            automaticallyMonitor: false,
+            processReader: { [target] }, identityReader: { _ in target.identity },
+            signaler: { _, signal in
+                if signal == SIGCONT {
+                    attempts += 1
+                    if attempts == 1 { errno = EPERM; return -1 }
+                }
+                return 0
+            }
+        )
+        controller.apply(try observation("NL"), allowedCountryCode: "NL")
+        XCTAssertEqual(controller.suspended, [target.identity])
+        guard case .failed = controller.status else { return XCTFail("Failed resume must not report active") }
+        controller.apply(try observation("NL"), allowedCountryCode: "NL")
+        XCTAssertTrue(controller.suspended.isEmpty)
+        XCTAssertEqual(attempts, 2)
+        guard case .active = controller.status else { return XCTFail("Successful retry must restore active status") }
+    }
+
+    func testUnknownCountryKeepsClaudePausedUntilExplicitTrust() throws {
+        let target = record(50, path: "/usr/local/bin/claude")
+        var signals: [Int32] = []
+        let controller = ProcessProtectionController(
+            automaticallyMonitor: false,
+            processReader: { [target] }, identityReader: { _ in target.identity },
+            signaler: { _, signal in signals.append(signal); return 0 }
+        )
+        controller.apply(try observation("NL"), allowedCountryCode: nil)
+        XCTAssertEqual(signals, [SIGSTOP])
+        guard case .needsAllowedCountry("NL", 1) = controller.status else {
+            return XCTFail("First run must expose the observed country without resuming Claude")
+        }
+    }
+
+    func testAppModelPersistsExplicitCountryAndActivatesProtection() async throws {
+        let suite = "ProcessProtectionControllerTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let target = record(60, path: "/Users/test/.local/bin/claude")
+        var signals: [Int32] = []
+        let controller = ProcessProtectionController(
+            automaticallyMonitor: false,
+            processReader: { [target] }, identityReader: { _ in target.identity },
+            signaler: { _, signal in signals.append(signal); return 0 }
+        )
+        let result = try EgressObservation.decode(
+            Data(#"{"success":true,"ip":"203.0.113.7","country_code":"NL"}"#.utf8),
+            provider: .ipWhoIS, checkedAt: Date(timeIntervalSince1970: 1)
+        )
+        let countryResult = try EgressObservation.decode(
+            Data(#"{"ip":"203.0.113.7","country":"NL"}"#.utf8),
+            provider: .ipInfo, checkedAt: Date(timeIntervalSince1970: 1)
+        )
+        let model = AppModel(
+            defaults: defaults, startsMonitoring: false, automaticCheckDelay: 0,
+            diagnosticsReader: { .notChecked }, egressReader: { provider in
+                provider == .ipWhoIS ? result : countryResult
+            },
+            processProtection: controller
+        )
+        model.refreshExternalIP()
+        for _ in 0..<200 {
+            if case .observed = model.externalCheck { break }
+            await Task.yield()
+        }
+        guard case .observed = model.externalCheck else { return XCTFail("Egress check did not finish") }
+        XCTAssertNil(model.preferences.allowedCountryCode)
+        XCTAssertEqual(signals, [SIGSTOP])
+
+        model.trustCurrentCountry()
+        XCTAssertEqual(model.preferences.allowedCountryCode, "NL")
+        XCTAssertEqual(signals, [SIGSTOP, SIGCONT])
+        XCTAssertEqual(model.protection, .countryConfirmed)
+        XCTAssertFalse(model.protection.canSafelyLaunch)
+        let stored = try XCTUnwrap(defaults.data(forKey: "armour.preferences.v1"))
+        XCTAssertEqual(try JSONDecoder().decode(AppPreferences.self, from: stored).allowedCountryCode, "NL")
+    }
+
+    func testPolicyUsesIpWhoIsWhenSelectedProviderDisagreesOnCountry() async throws {
+        let suite = "ProcessProtectionControllerTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let controller = ProcessProtectionController(automaticallyMonitor: false, processReader: { [] })
+        let model = AppModel(defaults: defaults, startsMonitoring: false, egressReader: { provider in
+            let json = provider == .ipWhoIS
+                ? #"{"success":true,"ip":"203.0.113.7","country_code":"NL"}"#
+                : #"{"ip":"203.0.113.7","country":"DE"}"#
+            return try EgressObservation.decode(Data(json.utf8), provider: provider)
+        }, processProtection: controller)
+        model.checkExternalIPAfterConsent(provider: .ipInfo)
+        for _ in 0..<200 {
+            if case .observed = model.externalCheck { break }
+            await Task.yield()
+        }
+        guard case .observed(let displayed) = model.externalCheck else { return XCTFail("Check did not finish") }
+        XCTAssertEqual(displayed.countryCode, "NL")
+        model.trustCurrentCountry()
+        XCTAssertEqual(model.preferences.allowedCountryCode, "NL")
+        guard case .active("NL", _) = controller.status else { return XCTFail("Policy must use ipwho.is") }
+    }
+
+    func testScheduledRefreshDoesNotSuspendAnAlreadySafeClaudeSession() async throws {
+        let suite = "ProcessProtectionControllerTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(
+            try JSONEncoder().encode(AppPreferences(allowedCountryCode: "NL")),
+            forKey: "armour.preferences.v1"
+        )
+
+        let target = record(70, path: "/Users/test/.local/bin/claude")
+        var signals: [Int32] = []
+        let controller = ProcessProtectionController(
+            automaticallyMonitor: false,
+            processReader: { [target] }, identityReader: { _ in target.identity },
+            signaler: { _, signal in signals.append(signal); return 0 }
+        )
+        var date = Date(timeIntervalSince1970: 1_000)
+        var requests = 0
+        var scheduledRefresh: CheckedContinuation<EgressObservation, Error>?
+        func result(_ provider: EgressProvider, country: String = "NL") throws -> EgressObservation {
+            let json = provider == .ipWhoIS
+                ? #"{"success":true,"ip":"203.0.113.7","country_code":"\#(country)"}"#
+                : #"{"ip":"203.0.113.7","country":"\#(country)"}"#
+            return try EgressObservation.decode(Data(json.utf8), provider: provider, checkedAt: date)
+        }
+        let model = AppModel(
+            defaults: defaults, startsMonitoring: false, now: { date }, automaticCheckDelay: 0,
+            diagnosticsReader: { .notChecked }, egressReader: { provider in
+                requests += 1
+                if requests <= 2 { return try result(provider) }
+                if requests == 3 {
+                    return try await withCheckedThrowingContinuation { scheduledRefresh = $0 }
+                }
+                if requests == 4 { return try result(provider) }
+                return try result(provider, country: "DE")
+            },
+            processProtection: controller
+        )
+
+        model.receive(NetworkSnapshot(connectivity: .available))
+        for _ in 0..<200 {
+            if case .observed = model.externalCheck { break }
+            await Task.yield()
+        }
+        XCTAssertEqual(signals, [SIGSTOP, SIGCONT])
+        XCTAssertEqual(model.protection, .countryConfirmed)
+        XCTAssertFalse(model.protection.canSafelyLaunch)
+
+        date.addTimeInterval(60)
+        model.expireExternalCheck()
+        for _ in 0..<200 {
+            if scheduledRefresh != nil { break }
+            await Task.yield()
+        }
+        XCTAssertNotNil(scheduledRefresh)
+        XCTAssertEqual(signals, [SIGSTOP, SIGCONT], "A scheduled refresh must not pause Claude while it is in flight")
+        XCTAssertEqual(model.protection, .countryConfirmed)
+        XCTAssertFalse(model.protection.canSafelyLaunch)
+
+        let continuation = try XCTUnwrap(scheduledRefresh)
+        continuation.resume(returning: try result(.ipWhoIS))
+        for _ in 0..<200 {
+            if case .observed = model.externalCheck { break }
+            await Task.yield()
+        }
+        XCTAssertEqual(requests, 4)
+        XCTAssertEqual(signals, [SIGSTOP, SIGCONT])
+        XCTAssertEqual(model.protection, .countryConfirmed)
+        XCTAssertFalse(model.protection.canSafelyLaunch)
+
+        date.addTimeInterval(60)
+        model.expireExternalCheck()
+        for _ in 0..<200 {
+            if requests == 6, !model.externalCheck.isChecking { break }
+            await Task.yield()
+        }
+        XCTAssertEqual(requests, 6)
+        XCTAssertEqual(signals, [SIGSTOP, SIGCONT, SIGSTOP], "A mismatched scheduled result must still pause Claude")
+        XCTAssertFalse(model.protection.canSafelyLaunch)
+    }
+
+    func testDisagreeingProvidersNeverActivateProtection() async throws {
+        let suite = "ProcessProtectionControllerTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(
+            try JSONEncoder().encode(AppPreferences(allowedCountryCode: "NL")),
+            forKey: "armour.preferences.v1"
+        )
+        let target = record(80, path: "/Users/test/.local/bin/claude")
+        var signals: [Int32] = []
+        let controller = ProcessProtectionController(
+            automaticallyMonitor: false,
+            processReader: { [target] }, identityReader: { _ in target.identity },
+            signaler: { _, signal in signals.append(signal); return 0 }
+        )
+        let model = AppModel(
+            defaults: defaults, startsMonitoring: false, automaticCheckDelay: 0,
+            diagnosticsReader: { .notChecked }, egressReader: { provider in
+                let json = provider == .ipWhoIS
+                    ? #"{"success":true,"ip":"203.0.113.7","country_code":"NL"}"#
+                    : #"{"ip":"203.0.113.8","country":"NL"}"#
+                return try EgressObservation.decode(Data(json.utf8), provider: provider)
+            },
+            processProtection: controller
+        )
+        model.refreshExternalIP()
+        for _ in 0..<200 {
+            if !model.externalCheck.isChecking { break }
+            await Task.yield()
+        }
+        guard case .failed(let message) = model.externalCheck else {
+            return XCTFail("Provider disagreement must fail the check")
+        }
+        XCTAssertTrue(message.contains("разный внешний IP"))
+        XCTAssertEqual(signals, [SIGSTOP])
+        XCTAssertFalse(model.protection.canSafelyLaunch)
+    }
+}

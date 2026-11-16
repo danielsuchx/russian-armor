@@ -1,30 +1,51 @@
 import Darwin
 import Foundation
 
-/// The selected provider is used for manual and automatic checks; no fallback.
+/// Automatic protection confirms the route with both providers. The selected
+/// provider is retained as the primary/manual provider for compatible settings.
 public enum EgressProvider: String, CaseIterable, Codable, Equatable, Sendable {
-    case countryIS
+    case ipInfo
     case ipWhoIS
 
     public var title: String {
         switch self {
-        case .countryIS: return "Country.is"
+        case .ipInfo: return "IPinfo"
         case .ipWhoIS: return "ipwho.is"
         }
     }
 
     public var host: String {
         switch self {
-        case .countryIS: return "api.country.is"
+        case .ipInfo: return "ipinfo.io"
         case .ipWhoIS: return "ipwho.is"
         }
     }
 
     public var endpoint: URL {
         switch self {
-        case .countryIS: return URL(string: "https://api.country.is/")!
+        case .ipInfo: return URL(string: "https://ipinfo.io/json")!
         case .ipWhoIS: return URL(string: "https://ipwho.is/?fields=success,ip,country_code")!
         }
+    }
+
+    public var alternate: EgressProvider {
+        self == .ipWhoIS ? .ipInfo : .ipWhoIS
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        switch value {
+        case Self.ipInfo.rawValue, "countryIS": self = .ipInfo
+        case Self.ipWhoIS.rawValue: self = .ipWhoIS
+        default:
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown egress provider")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 }
 
@@ -33,6 +54,8 @@ public enum EgressError: Error, Equatable, LocalizedError {
     case responseTooLarge
     case httpStatus(Int)
     case providerRejected
+    case providersDisagree
+    case independentConfirmationFailed
 
     public var errorDescription: String? {
         switch self {
@@ -41,6 +64,8 @@ public enum EgressError: Error, Equatable, LocalizedError {
         case .httpStatus(429): return "Сервис ограничил число запросов (HTTP 429). Попробуйте позже или выберите другой сервис."
         case .httpStatus(let status): return "Сервис вернул ошибку HTTP \(status). IP и страна не определены."
         case .providerRejected: return "Сервис не смог определить IP и страну. Можно выбрать другой сервис."
+        case .providersDisagree: return "Два независимых сервиса видят разный внешний IP. Выход не подтверждён."
+        case .independentConfirmationFailed: return "Не удалось получить два независимых подтверждения внешнего IP."
         }
     }
 
@@ -74,6 +99,28 @@ public enum EgressError: Error, Equatable, LocalizedError {
     }
 }
 
+public enum EgressConsensus {
+    public static func confirm(_ first: EgressObservation, _ second: EgressObservation) throws -> EgressObservation {
+        guard first.provider != second.provider else { throw EgressError.independentConfirmationFailed }
+        guard canonicalAddress(first.ip) == canonicalAddress(second.ip) else {
+            throw EgressError.providersDisagree
+        }
+        return first
+    }
+
+    private static func canonicalAddress(_ value: String) -> Data? {
+        var ipv4 = in_addr()
+        if value.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 {
+            return withUnsafeBytes(of: ipv4) { Data($0) }
+        }
+        var ipv6 = in6_addr()
+        if value.withCString({ inet_pton(AF_INET6, $0, &ipv6) }) == 1 {
+            return withUnsafeBytes(of: ipv6) { Data($0) }
+        }
+        return nil
+    }
+}
+
 /// Observes only this app's request to the explicitly selected provider. This is
 /// neither another app's route nor proof of VPN use or absence of leaks.
 public struct EgressObservation: Equatable, Sendable {
@@ -88,14 +135,14 @@ public struct EgressObservation: Equatable, Sendable {
 
     public static func decode(
         _ data: Data,
-        provider: EgressProvider = .countryIS,
+        provider: EgressProvider = .ipInfo,
         checkedAt: Date = Date()
     ) throws -> Self {
         guard data.count <= 4096 else { throw EgressError.responseTooLarge }
         let ip: String
         let country: String
         switch provider {
-        case .countryIS:
+        case .ipInfo:
             struct Response: Decodable { let ip: String; let country: String }
             guard let response = try? JSONDecoder().decode(Response.self, from: data) else {
                 throw EgressError.invalidResponse

@@ -5,9 +5,11 @@ import SwiftUI
 struct RussianArmourApp {
     @MainActor
     static func main() {
+        if ApplicationWatchdog.runHelperIfRequested() { return }
+        let watchdog = ApplicationWatchdog.start()
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
-        let delegate = ArmourApplicationDelegate()
+        let delegate = ArmourApplicationDelegate(watchdog: watchdog)
         app.delegate = delegate
         withExtendedLifetime(delegate) { app.run() }
     }
@@ -17,13 +19,43 @@ struct RussianArmourApp {
 private final class ArmourApplicationDelegate: NSObject, NSApplicationDelegate {
     private var statusMenu: NativeStatusMenu?
     private var windows: ArmourWindows?
+    private var model: AppModel?
+    private let watchdog: ApplicationWatchdog?
+    private var watchdogTimer: Timer?
+
+    init(watchdog: ApplicationWatchdog?) {
+        self.watchdog = watchdog
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let model = AppModel()
+        self.model = model
         let windows = ArmourWindows(model: model)
         self.windows = windows
         statusMenu = NativeStatusMenu(model: model) { [weak windows] kind in windows?.open(kind) }
+        watchdogTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak watchdog, weak model] _ in
+            Task { @MainActor in
+                do {
+                    try watchdog?.ensureRunning()
+                } catch {
+                    model?.recordWatchdogError("Watchdog: сбой", detail: error.localizedDescription)
+                }
+            }
+        }
         configureMainMenu()
+        if model.preferences.allowedCountryCode == nil {
+            DispatchQueue.main.async { [weak windows] in windows?.open(.readiness) }
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        watchdogTimer?.invalidate()
+        do {
+            try watchdog?.markCleanExit()
+        } catch {
+            model?.recordWatchdogError("Watchdog: ошибка при выходе", detail: error.localizedDescription)
+        }
+        model?.shutdownProtection()
     }
 
     private func configureMainMenu() {
@@ -80,9 +112,12 @@ private final class ArmourWindows {
                 title = "Соединения — Russian Armour"
                 size = NSSize(width: 960, height: 600)
             case .readiness:
-                content = AnyView(ReadinessView().environmentObject(model))
+                content = AnyView(ReadinessView(
+                    openSettings: { [weak self] in self?.open(.settings) },
+                    close: { [weak self] in self?.controllers[.readiness]?.close() }
+                ).environmentObject(model))
                 title = "Защита — Russian Armour"
-                size = NSSize(width: 510, height: 520)
+                size = NSSize(width: 460, height: 360)
             }
             let window = NSWindow(contentViewController: NSHostingController(rootView: content))
             window.title = title
@@ -92,7 +127,7 @@ private final class ArmourWindows {
                 window.styleMask.insert(.resizable)
                 window.contentMinSize = kind == .traffic ? NSSize(width: 860, height: 520) : NSSize(width: 540, height: 360)
             }
-            window.setContentSize(size)
+            window.setContentSize(kind == .readiness ? window.contentView?.fittingSize ?? size : size)
             window.isReleasedWhenClosed = false
             window.center()
             controller = NSWindowController(window: window)

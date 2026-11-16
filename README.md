@@ -1,5 +1,3 @@
-<img src="assets/icon.svg" width="64" height="64" alt="">
-
 # Russian Armour
 
 Нативное приложение для строки меню macOS, которое ставит Claude на паузу, если страна

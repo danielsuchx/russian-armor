@@ -5,6 +5,14 @@ struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
+        ScrollView {
+            settingsContent
+                .padding(24)
+        }
+        .frame(width: 480)
+    }
+
+    private var settingsContent: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(spacing: 12) {
                 Image(systemName: "shield.lefthalf.filled")
@@ -56,6 +64,8 @@ struct SettingsView: View {
                 }
                 if model.preferences.allowedCountryCode != nil {
                     Button("Выбрать заново") { model.clearAllowedCountry() }
+                } else {
+                    AllowedCountrySelectionView()
                 }
                 if model.usesIndependentConfirmation {
                     HStack {
@@ -97,7 +107,5 @@ struct SettingsView: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(24)
-        .frame(width: 480)
     }
 }

@@ -15,13 +15,8 @@ struct ReadinessView: View {
                             symbol: model.protection.symbol,
                             color: model.protection.isOperational ? .green : .orange)
 
-                if model.preferences.allowedCountryCode == nil,
-                   case .observed(let observation) = model.externalCheck {
-                    Button("Разрешить страну \(observation.countryCode)") {
-                        model.trustCurrentCountry()
-                    }
-                    .keyboardShortcut(.defaultAction)
-                    .accessibilityIdentifier("protection-trust-country")
+                if model.preferences.allowedCountryCode == nil {
+                    AllowedCountrySelectionView()
                 }
 
                 explanation(

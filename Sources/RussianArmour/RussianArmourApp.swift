@@ -48,7 +48,9 @@ private final class ArmourApplicationDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 do {
                     try watchdog?.ensureRunning()
+                    model?.watchdogHealthy = true
                 } catch {
+                    model?.watchdogHealthy = false
                     model?.recordWatchdogError("Watchdog: сбой", detail: error.localizedDescription)
                 }
             }

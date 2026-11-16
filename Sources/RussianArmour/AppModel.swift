@@ -31,6 +31,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var externalCheck = ExternalCheckState.notChecked
     @Published private(set) var externalProvider = EgressProvider.ipWhoIS
     @Published private(set) var journal: EventJournal
+    @Published var watchdogHealthy = true
     @Published var preferences: AppPreferences {
         didSet {
             save(preferences, forKey: Keys.preferences)

@@ -82,6 +82,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Toggle("Показывать имена туннелей при VPN на Mac", isOn: $model.preferences.showInterfaceNames)
                 Toggle("Записывать изменения сети и туннелей", isOn: $model.preferences.recordNetworkEvents)
+                Toggle("Запустить Russian Armour при входе на Mac", isOn: $model.preferences.startAtLogin)
             }
             .toggleStyle(.switch)
             .font(.callout)

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import ServiceManagement
 
 @main
 struct RussianArmourApp {
@@ -33,6 +34,16 @@ private final class ArmourApplicationDelegate: NSObject, NSApplicationDelegate {
         let windows = ArmourWindows(model: model)
         self.windows = windows
         statusMenu = NativeStatusMenu(model: model) { [weak windows] kind in windows?.open(kind) }
+
+        // Ensure autostart is enabled if protection is configured
+        if model.preferences.allowedCountryCode != nil {
+            do {
+                try SMAppService.mainApp.register()
+            } catch {
+                model.recordWatchdogError("Автозапуск", detail: "Не удалось включить: \(error.localizedDescription)")
+            }
+        }
+
         watchdogTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak watchdog, weak model] _ in
             Task { @MainActor in
                 do {

@@ -2,6 +2,7 @@ import AppKit
 import ArmourCore
 import Combine
 import Foundation
+import ServiceManagement
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -46,6 +47,9 @@ final class AppModel: ObservableObject {
             }
             if oldValue.allowedCountryCode != preferences.allowedCountryCode {
                 applyProtectionPolicy()
+            }
+            if oldValue.startAtLogin != preferences.startAtLogin {
+                updateAutostart(preferences.startAtLogin)
             }
             if automaticSettingsChanged || oldValue.vpnLocation != preferences.vpnLocation {
                 requestAutomaticExternalCheckIfNeeded()
@@ -372,6 +376,18 @@ final class AppModel: ObservableObject {
 
     func recordWatchdogError(_ title: String, detail: String) {
         record(title, detail: detail, kind: .warning)
+    }
+
+    private func updateAutostart(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            recordWatchdogError("Автозапуск", detail: enabled ? "Не удалось включить: \(error.localizedDescription)" : "Не удалось отключить: \(error.localizedDescription)")
+        }
     }
 
     private func save<T: Encodable>(_ value: T, forKey key: String) {

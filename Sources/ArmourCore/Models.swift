@@ -107,6 +107,7 @@ public struct AppPreferences: Equatable, Codable, Sendable {
     public var automaticIPChecks: Bool
     public var egressProvider: EgressProvider
     public var allowedCountryCode: String?
+    public var startAtLogin: Bool
 
     public init(
         showInterfaceNames: Bool = true,
@@ -114,7 +115,8 @@ public struct AppPreferences: Equatable, Codable, Sendable {
         vpnLocation: VPNLocation = .unspecified,
         automaticIPChecks: Bool = true,
         egressProvider: EgressProvider = .ipWhoIS,
-        allowedCountryCode: String? = nil
+        allowedCountryCode: String? = nil,
+        startAtLogin: Bool = false
     ) {
         self.showInterfaceNames = showInterfaceNames
         self.recordNetworkEvents = recordNetworkEvents
@@ -122,10 +124,11 @@ public struct AppPreferences: Equatable, Codable, Sendable {
         self.automaticIPChecks = automaticIPChecks
         self.egressProvider = egressProvider
         self.allowedCountryCode = Self.validCountryCode(allowedCountryCode)
+        self.startAtLogin = startAtLogin
     }
 
     private enum CodingKeys: CodingKey {
-        case showInterfaceNames, recordNetworkEvents, vpnLocation, automaticIPChecks, egressProvider, allowedCountryCode
+        case showInterfaceNames, recordNetworkEvents, vpnLocation, automaticIPChecks, egressProvider, allowedCountryCode, startAtLogin
     }
 
     public init(from decoder: Decoder) throws {
@@ -136,6 +139,7 @@ public struct AppPreferences: Equatable, Codable, Sendable {
         automaticIPChecks = try values.decodeIfPresent(Bool.self, forKey: .automaticIPChecks) ?? true
         egressProvider = try values.decodeIfPresent(EgressProvider.self, forKey: .egressProvider) ?? .ipWhoIS
         allowedCountryCode = Self.validCountryCode(try values.decodeIfPresent(String.self, forKey: .allowedCountryCode))
+        startAtLogin = try values.decodeIfPresent(Bool.self, forKey: .startAtLogin) ?? false
     }
 
     private static func validCountryCode(_ value: String?) -> String? {

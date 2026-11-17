@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIGURATION="${1:-debug}"
+CONFIGURATION="${1:-release}"
 case "$CONFIGURATION" in
     debug|release) ;;
     *) printf 'Usage: bash scripts/build-app.sh [debug|release]\n' >&2; exit 2 ;;
@@ -12,17 +12,42 @@ esac
 swift build --package-path "$ROOT" --configuration "$CONFIGURATION"
 BIN_DIR="$(swift build --package-path "$ROOT" --configuration "$CONFIGURATION" --show-bin-path)"
 APP="$ROOT/dist/Russian Armor.app"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$ROOT/Support/Info.plist" "$APP/Contents/Info.plist"
-cp "$ROOT/Sources/RussianArmor/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
-# Replace the executable atomically; do not truncate a binary mapped by a running app.
-STAGED_BINARY="$(mktemp "$APP/Contents/MacOS/.RussianArmor.XXXXXX")"
-trap 'rm -f "$STAGED_BINARY"' EXIT
-cp "$BIN_DIR/RussianArmor" "$STAGED_BINARY"
-chmod 755 "$STAGED_BINARY"
-mv -f "$STAGED_BINARY" "$APP/Contents/MacOS/RussianArmor"
-/usr/bin/plutil -lint "$APP/Contents/Info.plist"
+mkdir -p "$ROOT/dist"
+STAGING_DIRECTORY="$(mktemp -d "$ROOT/dist/.RussianArmor.XXXXXX")"
+trap 'rm -rf "$STAGING_DIRECTORY"' EXIT
+STAGED_APP="$STAGING_DIRECTORY/Russian Armor.app"
+# Assemble only these files; stale or user-added files in the old app cannot leak.
+mkdir -p "$STAGED_APP/Contents/MacOS" "$STAGED_APP/Contents/Resources"
+cp -X "$ROOT/Support/Info.plist" "$STAGED_APP/Contents/Info.plist"
+cp -X "$ROOT/Sources/RussianArmor/Resources/AppIcon.icns" "$STAGED_APP/Contents/Resources/AppIcon.icns"
+cp -X "$BIN_DIR/RussianArmor" "$STAGED_APP/Contents/MacOS/RussianArmor"
+chmod 755 "$STAGED_APP/Contents/MacOS/RussianArmor"
+if [[ "$CONFIGURATION" == release ]]; then
+    # SwiftPM release binaries retain debug/linker metadata containing source paths.
+    /usr/bin/strip -S -x "$STAGED_APP/Contents/MacOS/RussianArmor"
+    /usr/bin/strings -a "$STAGED_APP/Contents/MacOS/RussianArmor" > "$STAGING_DIRECTORY/binary-strings.txt"
+    if /usr/bin/grep -Fq "$ROOT/" "$STAGING_DIRECTORY/binary-strings.txt" \
+        || /usr/bin/grep -Eq '/Users/[^/]+/|/home/[^/]+/' "$STAGING_DIRECTORY/binary-strings.txt"; then
+        printf 'Release verification failed: local build paths remain in the executable.\n' >&2
+        exit 1
+    fi
+fi
+/usr/bin/plutil -lint "$STAGED_APP/Contents/Info.plist"
 # The standalone SPM executable's signature does not seal this assembled bundle.
-/usr/bin/codesign --force --sign - "$APP"
-/usr/bin/codesign --verify --strict "$APP"
+/usr/bin/codesign --force --sign - "$STAGED_APP"
+/usr/bin/codesign --verify --strict "$STAGED_APP"
+# Swap complete bundles atomically. A running app keeps its mapped executable;
+# the old bundle moves into our staging directory and is removed by the trap.
+swift - "$STAGED_APP" "$APP" <<'SWIFT'
+import Darwin
+import Foundation
+let staged = CommandLine.arguments[1]
+let destination = CommandLine.arguments[2]
+let exists = FileManager.default.fileExists(atPath: destination)
+let result = exists ? renamex_np(staged, destination, UInt32(RENAME_SWAP)) : rename(staged, destination)
+guard result == 0 else {
+    perror("Cannot install app bundle")
+    exit(1)
+}
+SWIFT
 printf '\nBuilt: %s\nLaunch: open "%s"\n' "$APP" "$APP"

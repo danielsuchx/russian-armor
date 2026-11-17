@@ -15,9 +15,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/версия-0.2.0-0078d4?style=flat-square" alt="Версия 0.2.0">
   <img src="https://img.shields.io/badge/macOS-13%2B-555555?style=flat-square" alt="macOS 13 и новее">
-  <img src="https://img.shields.io/badge/Swift-5.9%2B-F05138?style=flat-square" alt="Swift 5.9 и новее">
-  <img src="https://img.shields.io/badge/сборка-из_исходников-555555?style=flat-square" alt="Сборка из исходников">
-  <img src="https://img.shields.io/badge/подпись-локальная-555555?style=flat-square" alt="Локальная подпись, без нотариального заверения Apple">
 </p>
 
 <p align="center">

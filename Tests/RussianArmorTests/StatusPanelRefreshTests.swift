@@ -67,7 +67,7 @@ final class StatusPanelRefreshTests: XCTestCase {
         XCTAssertTrue(fixture.model.protection.isOperational)
         let comparison = fixture.model.countryComparison
 
-        fixture.instant += 45
+        fixture.instant += ProtectionTiming.checkInterval
         fixture.holdNextRead = true
         fixture.model.refreshExternalIP()
         await waitFor { fixture.pending != nil }
@@ -92,7 +92,7 @@ final class StatusPanelRefreshTests: XCTestCase {
         defer { fixture.finish() }
         fixture.model.refreshExternalIP()
         await waitFor { !fixture.model.externalCheck.isChecking }
-        fixture.instant += 45
+        fixture.instant += ProtectionTiming.checkInterval
         fixture.holdNextRead = true
         fixture.model.refreshExternalIP()
         await waitFor { fixture.pending != nil }
@@ -112,11 +112,11 @@ final class StatusPanelRefreshTests: XCTestCase {
         defer { fixture.finish() }
         fixture.model.refreshExternalIP()
         await waitFor { !fixture.model.externalCheck.isChecking }
-        fixture.instant += 45
+        fixture.instant += ProtectionTiming.checkInterval
         fixture.holdNextRead = true
         fixture.model.refreshExternalIP()
         await waitFor { fixture.pending != nil }
-        fixture.instant += 15
+        fixture.instant += ProtectionTiming.confirmationLifetime - ProtectionTiming.checkInterval
         fixture.model.expireExternalCheck()
         let content = StatusPanelContent(model: fixture.model)
         XCTAssertEqual(content.country, "Проверяется…")
@@ -152,7 +152,7 @@ final class StatusPanelRefreshTests: XCTestCase {
             print("REFRESH_PANEL_\(name.uppercased()): \(target.path)")
         }
         try capture("before")
-        fixture.instant += 45
+        fixture.instant += ProtectionTiming.checkInterval
         fixture.holdNextRead = true
         fixture.model.refreshExternalIP()
         await waitFor { fixture.pending != nil }
@@ -171,7 +171,7 @@ final class StatusPanelRefreshTests: XCTestCase {
         defer { fixture.finish() }
         fixture.model.refreshExternalIP()
         await waitFor { !fixture.model.externalCheck.isChecking }
-        fixture.instant += 45
+        fixture.instant += ProtectionTiming.checkInterval
         fixture.holdNextRead = true
         fixture.model.refreshExternalIP()
         await waitFor { fixture.pending != nil }

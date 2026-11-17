@@ -84,7 +84,7 @@ struct StatusPanelContent: Equatable {
         }
         claude = model.diagnostics.claudeDesktop.title.lowercased()
         externalDetail = model.automaticChecksEnabled
-            ? "\(model.usesIndependentConfirmation ? "Два независимых сервиса" : model.preferences.egressProvider.title) · фоновая проверка раз в минуту."
+            ? "\(model.usesIndependentConfirmation ? "Два независимых сервиса" : model.preferences.egressProvider.title) · фоновая проверка \(model.usesIndependentConfirmation ? "каждые 5 секунд" : "раз в минуту")."
             : "Автопроверка выключена. Для разового запроса нажмите на строку IP."
         let confirmedObservation = model.confirmedEgressObservation
         var displayedCheck = model.externalCheck

@@ -110,6 +110,7 @@ public struct AppPreferences: Equatable, Codable, Sendable {
     public var egressProvider: EgressProvider
     public var allowedCountryCode: String?
     public var startAtLogin: Bool
+    public var serviceDiagnosticsEnabled: Bool
     /// nil retains the legacy single-country policy until the rule editor is saved.
     public var accessConfiguration: AccessConfiguration?
     public var preferredTunnelOwner: String?
@@ -122,6 +123,7 @@ public struct AppPreferences: Equatable, Codable, Sendable {
         egressProvider: EgressProvider = .ipWhoIS,
         allowedCountryCode: String? = nil,
         startAtLogin: Bool = false,
+        serviceDiagnosticsEnabled: Bool = false,
         accessConfiguration: AccessConfiguration? = nil,
         preferredTunnelOwner: String? = nil
     ) {
@@ -132,12 +134,13 @@ public struct AppPreferences: Equatable, Codable, Sendable {
         self.egressProvider = egressProvider
         self.allowedCountryCode = Self.validCountryCode(allowedCountryCode)
         self.startAtLogin = startAtLogin
+        self.serviceDiagnosticsEnabled = serviceDiagnosticsEnabled
         self.accessConfiguration = accessConfiguration
         self.preferredTunnelOwner = preferredTunnelOwner
     }
 
     private enum CodingKeys: CodingKey {
-        case showInterfaceNames, recordNetworkEvents, vpnLocation, automaticIPChecks, egressProvider, allowedCountryCode, startAtLogin, accessConfiguration, preferredTunnelOwner
+        case showInterfaceNames, recordNetworkEvents, vpnLocation, automaticIPChecks, egressProvider, allowedCountryCode, startAtLogin, serviceDiagnosticsEnabled, accessConfiguration, preferredTunnelOwner
     }
 
     public init(from decoder: Decoder) throws {
@@ -149,6 +152,7 @@ public struct AppPreferences: Equatable, Codable, Sendable {
         egressProvider = try values.decodeIfPresent(EgressProvider.self, forKey: .egressProvider) ?? .ipWhoIS
         allowedCountryCode = Self.validCountryCode(try values.decodeIfPresent(String.self, forKey: .allowedCountryCode))
         startAtLogin = try values.decodeIfPresent(Bool.self, forKey: .startAtLogin) ?? false
+        serviceDiagnosticsEnabled = try values.decodeIfPresent(Bool.self, forKey: .serviceDiagnosticsEnabled) ?? false
         preferredTunnelOwner = try values.decodeIfPresent(String.self, forKey: .preferredTunnelOwner)
         accessConfiguration = try values.decodeIfPresent(AccessConfiguration.self, forKey: .accessConfiguration)
         if let accessConfiguration, !accessConfiguration.isValid {

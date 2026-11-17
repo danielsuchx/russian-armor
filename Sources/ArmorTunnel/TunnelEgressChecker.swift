@@ -11,13 +11,15 @@ public struct TunnelCheckResult: Sendable {
 
 public enum TunnelEgressChecker {
     public static func check(ownerKey: String?, probeAddresses: [String: String] = [:],
-                             verifier: EgressVerifier? = nil) async throws -> TunnelCheckResult {
+                             verifier: EgressVerifier? = nil,
+                             independentExit: Bool = false) async throws -> TunnelCheckResult {
         let worker = Task.detached(priority: .utility) { try TunnelOwnershipReader.select(TunnelOwnershipReader.read(), ownerKey: ownerKey) }
         let tunnel = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
         let service: EgressVerifier
         if let verifier { service = verifier } else { service = await EgressVerifier.shared }
         // A firewall's explicit probe allowlist is never expanded by fallback.
-        let result = try await service.check(primary: .ipWhoIS, allowsBackup: probeAddresses.isEmpty) { provider, observedIP in
+        let result = try await service.check(primary: .ipWhoIS, allowsBackup: probeAddresses.isEmpty,
+                                             mode: independentExit ? .independentExit : .addressLookup) { provider, observedIP in
             let url = try provider.lookupURL(address: observedIP)
             let path = url.path + (url.query.map { "?" + $0 } ?? "")
             let body = try await TunnelHTTP.get(host: provider.host, path: path, interface: tunnel.interface,

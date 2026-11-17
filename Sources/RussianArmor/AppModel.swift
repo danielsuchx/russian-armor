@@ -85,6 +85,8 @@ final class AppModel: ObservableObject {
     let traffic: TrafficMonitor
     let happConnections: HappConnectionMonitor
     let claudeRoutes: ClaudeRouteMonitor
+    let connectionDiagnostics: ConnectionDiagnosticsMonitor
+    private let runsConnectionDiagnostics: Bool
     private let requiresClaudeRoutes: Bool
     private let requiresTunnelChecks: Bool
     private let tunnelEgressReader: (String?) async throws -> TunnelCheckResult
@@ -153,6 +155,10 @@ final class AppModel: ObservableObject {
             if oldValue.recordNetworkEvents != preferences.recordNetworkEvents {
                 happConnections.receive(traffic.state, recordsEvents: preferences.recordNetworkEvents)
             }
+            if oldValue.serviceDiagnosticsEnabled != preferences.serviceDiagnosticsEnabled {
+                connectionDiagnostics.invalidate(sleeping: isSleeping)
+                refreshConnectionDiagnostics()
+            }
             if oldValue.startAtLogin != preferences.startAtLogin {
                 updateAutostart(preferences.startAtLogin)
             }
@@ -185,6 +191,12 @@ final class AppModel: ObservableObject {
     private let externalCheckTimeout: TimeInterval = 25
     private var externalGeneration = UUID()
     private let externalCheckInterval: TimeInterval = 60
+    private var confirmationLifetime: TimeInterval {
+        usesIndependentConfirmation ? ProtectionTiming.confirmationLifetime : externalCheckInterval
+    }
+    private var failureRetryInterval: TimeInterval {
+        usesIndependentConfirmation ? ProtectionTiming.failureRetryInterval : externalCheckInterval
+    }
     private var nextAutomaticCheckAt = Date.distantPast
     private let now: () -> Date
     private let automaticCheckDelay: UInt64
@@ -204,8 +216,11 @@ final class AppModel: ObservableObject {
         recoverySuccesses: Int? = nil,
         tunnelEgressReader: ((String?) async throws -> TunnelCheckResult)? = nil,
         happConnectionMonitor: HappConnectionMonitor? = nil,
+        connectionDiagnostics: ConnectionDiagnosticsMonitor? = nil,
         claudeLauncher: @escaping () async throws -> Void = { try await ClaudeDesktopLauncher.launch() }
     ) {
+        self.connectionDiagnostics = connectionDiagnostics ?? ConnectionDiagnosticsMonitor(now: now)
+        self.runsConnectionDiagnostics = startsMonitoring || connectionDiagnostics != nil
         traffic = TrafficMonitor(reader: trafficReader)
         self.happConnections = happConnectionMonitor ?? HappConnectionMonitor()
         self.defaults = defaults
@@ -213,7 +228,7 @@ final class AppModel: ObservableObject {
         self.requiresTunnelChecks = startsMonitoring || tunnelEgressReader != nil
         let verifier = EgressVerifier(now: now)
         self.egressVerifier = verifier
-        self.tunnelEgressReader = tunnelEgressReader ?? { try await TunnelEgressChecker.check(ownerKey: $0, verifier: verifier) }
+        self.tunnelEgressReader = tunnelEgressReader ?? { try await TunnelEgressChecker.check(ownerKey: $0, verifier: verifier, independentExit: true) }
         recovery = RecoveryGate(requiredSuccesses: recoverySuccesses ?? (startsMonitoring ? 3 : 1))
         self.now = now
         self.automaticCheckDelay = automaticCheckDelay
@@ -359,7 +374,6 @@ final class AppModel: ObservableObject {
         let tunnelRead = tunnelEgressReader
         let ownerKey = preferences.preferredTunnelOwner
         let verifier = egressVerifier
-        let liveRequests = startsMonitoring
         externalTask = Task { [weak self] in
             do {
                 if delay > 0 { try await Task.sleep(nanoseconds: delay) }
@@ -375,10 +389,7 @@ final class AppModel: ObservableObject {
                     comparison = CountryComparison(first: result.first, second: result.second)
                     checkedTunnel = result.tunnel
                 } else if requiresConsensus {
-                    let result = try await verifier.check(primary: provider) { source, observedIP in
-                        if liveRequests, let observedIP {
-                            return try await EgressChecker(provider: source).check(address: observedIP)
-                        }
+                    let result = try await verifier.check(primary: provider, mode: .independentExit) { source, _ in
                         return try await read(source)
                     }
                     observation = result.observation
@@ -399,6 +410,9 @@ final class AppModel: ObservableObject {
                 if self.verifiedTunnel != checkedTunnel {
                     self.recovery.reset()
                 }
+                if self.protectionObservation?.ip != policyObservation.ip {
+                    self.connectionDiagnostics.invalidate()
+                }
                 self.verifiedTunnel = checkedTunnel
                 self.countryComparison = comparison
                 self.confirmedAt = startedAt
@@ -410,7 +424,10 @@ final class AppModel: ObservableObject {
                 self.applyProtectionPolicy()
                 // Recovery is deliberately slower than suspension, without a grace
                 // period that would keep working after a failed verification.
-                self.nextAutomaticCheckAt = startedAt.addingTimeInterval(!self.recovery.isReady ? 2 : (requiresConsensus ? 45 : self.externalCheckInterval))
+                let interval = !self.recovery.isReady ? ProtectionTiming.recoveryInterval
+                    : (requiresConsensus ? ProtectionTiming.checkInterval : self.externalCheckInterval)
+                // Do not catch up missed ticks with a burst after a slow response.
+                self.nextAutomaticCheckAt = max(startedAt.addingTimeInterval(interval), self.now().addingTimeInterval(1))
                 if recordsResult {
                     let services = comparison?.services ?? provider.title
                     self.record("Внешний выход проверен", detail: "Запросы Russian Armor к \(services). IP и страна в историю не записываются.")
@@ -426,7 +443,7 @@ final class AppModel: ObservableObject {
                 self.verifiedTunnel = nil
                 self.externalCheck = .failed((error as? TunnelCheckError)?.errorDescription ?? EgressError.safeMessage(for: error))
                 self.processProtection?.pause("Не удалось подтвердить безопасный выход.")
-                self.nextAutomaticCheckAt = self.now().addingTimeInterval(self.externalCheckInterval)
+                self.nextAutomaticCheckAt = self.now().addingTimeInterval(self.failureRetryInterval)
                 if let retryAt = (error as? EgressServiceFailure)?.retryAt {
                     self.nextAutomaticCheckAt = max(self.nextAutomaticCheckAt, retryAt)
                 }
@@ -438,7 +455,14 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func refreshConnectionDiagnostics() {
+        guard runsConnectionDiagnostics, !isSleeping else { return }
+        connectionDiagnostics.tick(online: network.connectivity == .available,
+                                   servicesEnabled: preferences.serviceDiagnosticsEnabled)
+    }
+
     func expireExternalCheck(now date: Date? = nil) {
+        refreshConnectionDiagnostics()
         claudeRoutes.expire()
         let instant = date ?? now()
         if let confirmedAt, instant < confirmedAt {
@@ -448,10 +472,10 @@ final class AppModel: ObservableObject {
            instant.timeIntervalSince(started) >= externalCheckTimeout {
             invalidateExternalCheck("Сервисы не ответили вовремя. Claude остаётся на паузе.")
             externalCheck = .failed(EgressError.safeMessage(for: URLError(.timedOut)))
-            nextAutomaticCheckAt = instant.addingTimeInterval(externalCheckInterval)
+            nextAutomaticCheckAt = instant.addingTimeInterval(failureRetryInterval)
             return
         }
-        if let confirmedAt, instant.timeIntervalSince(confirmedAt) >= externalCheckInterval {
+        if let confirmedAt, instant.timeIntervalSince(confirmedAt) >= confirmationLifetime {
             // Revoke the lease even while a refresh is in flight. A hung request
             // must never turn a previous success into an unlimited permission.
             self.confirmedAt = nil
@@ -470,6 +494,7 @@ final class AppModel: ObservableObject {
     }
 
     private func invalidateExternalCheck(_ reason: String) {
+        connectionDiagnostics.invalidate(sleeping: isSleeping)
         recovery.reset()
         verifiedTunnel = nil
         protectionCountries = []
@@ -522,6 +547,7 @@ final class AppModel: ObservableObject {
     func resumeAfterWake() {
         traffic.resumeAfterWake()
         isSleeping = false
+        connectionDiagnostics.invalidate()
         claudeRoutes.resumeAfterWake()
         network = .checking
         record("Mac проснулся", detail: "Заново проверяем локальное состояние. Это не проверка сетевой защиты.", kind: .wake)
@@ -695,7 +721,7 @@ final class AppModel: ObservableObject {
     private var currentObservation: EgressObservation? {
         guard let confirmedAt,
               now().timeIntervalSince(confirmedAt) >= 0,
-              now().timeIntervalSince(confirmedAt) < externalCheckInterval else { return nil }
+              now().timeIntervalSince(confirmedAt) < confirmationLifetime else { return nil }
         switch externalCheck {
         case .observed(let observation):
             return processProtection == nil ? observation : protectionObservation

@@ -226,7 +226,7 @@ struct SettingsView: View {
                     valueRow("Источники", value: model.countryComparison?.services ?? "ipwho.is + IPinfo / GeoJS")
                     valueRow("Подтверждение", value: model.recoveryProgress)
                     DisclosureGroup("Как принимается решение") {
-                        Text("Восстановление после трёх успешных проверок, затем обновление до истечения минутного допуска. При лимите или недоступности IPinfo используется GeoJS. Второй сервис проверяет IP первого ответа. В режиме одной страны источник правила — ipwho.is; в правилах профиля учитываются оба ответа. Проверяется выход Russian Armor, а не каждого соединения Claude.")
+                        Text("Восстановление после трёх успешных проверок с интервалом не менее двух секунд. Затем проверка каждые 5 секунд; допуск действует не более 15 секунд от начала проверки. Каждый сервис самостоятельно определяет внешний IP своего запроса; адреса должны совпасть. При лимите или недоступности IPinfo используется GeoJS, с соблюдением паузы сервиса. В режиме одной страны источник правила — ipwho.is; в правилах профиля учитываются оба ответа. Проверяется выход Russian Armor, а не каждого соединения Claude.")
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, 6)
@@ -245,6 +245,9 @@ struct SettingsView: View {
                 .disabled(model.externalCheck.isChecking || model.isSleeping)
                 .accessibilityIdentifier("settings-recheck")
             }
+            ConnectionDiagnosticsView(monitor: model.connectionDiagnostics,
+                                      enabled: $model.preferences.serviceDiagnosticsEnabled,
+                                      expectedIP: model.confirmedEgressObservation?.ip)
             ClaudeRoutesView(monitor: model.claudeRoutes, vpnLocation: model.preferences.vpnLocation)
             ProtectionSelfTestView()
             settingsGroup("История событий") {

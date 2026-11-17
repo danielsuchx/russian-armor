@@ -27,8 +27,16 @@ public final class EgressVerifier {
 
     public init(now: @escaping () -> Date = Date.init) { self.now = now }
 
+    public enum Mode: Sendable {
+        /// Two GeoIP databases for the first address; not two exit observations.
+        case addressLookup
+        /// Each provider must observe the source address of its own request.
+        case independentExit
+    }
+
     public func check(primary: EgressProvider, allowsBackup: Bool = true,
-                      read: Reader) async throws -> EgressVerification {
+                      mode: Mode = .addressLookup, read: Reader) async throws -> EgressVerification {
+        func address(_ ip: String) -> String? { mode == .independentExit ? nil : ip }
         let first: EgressObservation
         do {
             first = try await query(primary, address: nil, read: read)
@@ -37,14 +45,14 @@ public final class EgressVerifier {
             // observation disappear or turn into a one-provider permission.
             let authoritative = try await query(.ipWhoIS, address: nil, read: read)
             let backup: EgressProvider = primary == .ipInfo ? .geoJS : .ipInfo
-            let independent = try await query(backup, address: authoritative.ip, read: read)
+            let independent = try await query(backup, address: address(authoritative.ip), read: read)
             return try verification(authoritative, independent)
         }
         let second: EgressObservation
         do {
-            second = try await query(primary.alternate, address: first.ip, read: read)
+            second = try await query(primary.alternate, address: address(first.ip), read: read)
         } catch let failure as EgressServiceFailure where allowsBackup && primary == .ipWhoIS && failure.permitsBackup {
-            second = try await query(.geoJS, address: first.ip, read: read)
+            second = try await query(.geoJS, address: address(first.ip), read: read)
         }
         // Disagreement, malformed data and policy denials never trigger fallback.
         return try verification(first, second)

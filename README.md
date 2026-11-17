@@ -1,16 +1,4 @@
-<h1 align="center">Russian Armor</h1>
-
-<h2 align="center">
-  Контроль подключения для Claude Desktop и Claude Code на macOS.<br>
-  Сменилась сеть, пропал интернет или разрешённая страна выхода не подтверждена — Claude на паузе.<br>
-  Выход снова подтверждён — работа продолжается.
-</h2>
-
-<p align="center">
-  <strong>Проект на GitHub:</strong>
-  <a href="https://github.com/danielsuchx/russian-armor">danielsuchx/russian-armor</a>
-  — исходный код, сборка и документация
-</p>
+<h1 align="center">Russian Armor — броня для вашей работы с Claude</h1>
 
 <p align="center">
   <img src="https://img.shields.io/badge/версия-0.2.0-0078d4?style=flat-square" alt="Версия 0.2.0">

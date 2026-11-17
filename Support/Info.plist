@@ -5,17 +5,19 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>ru</string>
     <key>CFBundleExecutable</key>
-    <string>RussianArmour</string>
+    <string>RussianArmor</string>
     <key>CFBundleIdentifier</key>
-    <string>app.russian-armour.desktop</string>
+    <string>app.russian-armor.desktop</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Russian Armour</string>
+    <string>Russian Armor</string>
     <key>CFBundleDisplayName</key>
-    <string>Russian Armour</string>
+    <string>Russian Armor</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleShortVersionString</key>
     <string>0.2.0</string>
     <key>CFBundleVersion</key>

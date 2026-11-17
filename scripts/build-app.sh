@@ -11,15 +11,16 @@ esac
 
 swift build --package-path "$ROOT" --configuration "$CONFIGURATION"
 BIN_DIR="$(swift build --package-path "$ROOT" --configuration "$CONFIGURATION" --show-bin-path)"
-APP="$ROOT/dist/Russian Armour.app"
+APP="$ROOT/dist/Russian Armor.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$ROOT/Support/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/Sources/RussianArmor/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 # Replace the executable atomically; do not truncate a binary mapped by a running app.
-STAGED_BINARY="$(mktemp "$APP/Contents/MacOS/.RussianArmour.XXXXXX")"
+STAGED_BINARY="$(mktemp "$APP/Contents/MacOS/.RussianArmor.XXXXXX")"
 trap 'rm -f "$STAGED_BINARY"' EXIT
-cp "$BIN_DIR/RussianArmour" "$STAGED_BINARY"
+cp "$BIN_DIR/RussianArmor" "$STAGED_BINARY"
 chmod 755 "$STAGED_BINARY"
-mv -f "$STAGED_BINARY" "$APP/Contents/MacOS/RussianArmour"
+mv -f "$STAGED_BINARY" "$APP/Contents/MacOS/RussianArmor"
 /usr/bin/plutil -lint "$APP/Contents/Info.plist"
 # The standalone SPM executable's signature does not seal this assembled bundle.
 /usr/bin/codesign --force --sign - "$APP"

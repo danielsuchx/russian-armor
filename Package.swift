@@ -2,15 +2,20 @@
 import PackageDescription
 
 let package = Package(
-    name: "RussianArmour",
+    name: "RussianArmor",
     platforms: [.macOS(.v13)],
     products: [
-        .executable(name: "RussianArmour", targets: ["RussianArmour"])
+        .executable(name: "RussianArmor", targets: ["RussianArmor"]),
+        .executable(name: "ArmorFirewall", targets: ["ArmorFirewall"])
     ],
     targets: [
-        .target(name: "ArmourCore"),
-        .executableTarget(name: "RussianArmour", dependencies: ["ArmourCore"]),
-        .testTarget(name: "ArmourCoreTests", dependencies: ["ArmourCore"]),
-        .testTarget(name: "RussianArmourTests", dependencies: ["RussianArmour", "ArmourCore"])
+        .target(name: "ArmorCore"),
+        .target(name: "ArmorTunnel", dependencies: ["ArmorCore"]),
+        .executableTarget(name: "ArmorFirewall", dependencies: ["ArmorCore", "ArmorTunnel"]),
+        .executableTarget(name: "RussianArmor", dependencies: ["ArmorCore", "ArmorTunnel"],
+                          resources: [.copy("Resources/AppIcon.icns")]),
+        .testTarget(name: "ArmorCoreTests", dependencies: ["ArmorCore"]),
+        .testTarget(name: "ArmorFirewallTests", dependencies: ["ArmorFirewall", "ArmorCore"]),
+        .testTarget(name: "RussianArmorTests", dependencies: ["RussianArmor", "ArmorCore", "ArmorTunnel"])
     ]
 )

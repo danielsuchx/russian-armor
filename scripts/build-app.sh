@@ -4,13 +4,20 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIGURATION="${1:-release}"
+ARCHITECTURE="${2:-native}"
 case "$CONFIGURATION" in
     debug|release) ;;
-    *) printf 'Usage: bash scripts/build-app.sh [debug|release]\n' >&2; exit 2 ;;
+    *) printf 'Usage: bash scripts/build-app.sh [debug|release] [native|universal]\n' >&2; exit 2 ;;
 esac
 
-swift build --package-path "$ROOT" --configuration "$CONFIGURATION"
-BIN_DIR="$(swift build --package-path "$ROOT" --configuration "$CONFIGURATION" --show-bin-path)"
+BUILD_OPTIONS=(--package-path "$ROOT" --configuration "$CONFIGURATION" --product RussianArmor)
+case "$ARCHITECTURE" in
+    native) ;;
+    universal) BUILD_OPTIONS+=(--arch arm64 --arch x86_64 --scratch-path "$ROOT/.build/universal") ;;
+    *) printf 'Unknown architecture: use native or universal.\n' >&2; exit 2 ;;
+esac
+swift build "${BUILD_OPTIONS[@]}"
+BIN_DIR="$(swift build "${BUILD_OPTIONS[@]}" --show-bin-path)"
 APP="$ROOT/dist/Russian Armor.app"
 mkdir -p "$ROOT/dist"
 STAGING_DIRECTORY="$(mktemp -d "$ROOT/dist/.RussianArmor.XXXXXX")"
@@ -22,6 +29,9 @@ cp -X "$ROOT/Support/Info.plist" "$STAGED_APP/Contents/Info.plist"
 cp -X "$ROOT/Sources/RussianArmor/Resources/AppIcon.icns" "$STAGED_APP/Contents/Resources/AppIcon.icns"
 cp -X "$BIN_DIR/RussianArmor" "$STAGED_APP/Contents/MacOS/RussianArmor"
 chmod 755 "$STAGED_APP/Contents/MacOS/RussianArmor"
+if [[ "$ARCHITECTURE" == universal ]]; then
+    /usr/bin/lipo "$STAGED_APP/Contents/MacOS/RussianArmor" -verify_arch arm64 x86_64
+fi
 if [[ "$CONFIGURATION" == release ]]; then
     # SwiftPM release binaries retain debug/linker metadata containing source paths.
     /usr/bin/strip -S -x "$STAGED_APP/Contents/MacOS/RussianArmor"
@@ -35,7 +45,7 @@ fi
 /usr/bin/plutil -lint "$STAGED_APP/Contents/Info.plist"
 # The standalone SPM executable's signature does not seal this assembled bundle.
 /usr/bin/codesign --force --sign - "$STAGED_APP"
-/usr/bin/codesign --verify --strict "$STAGED_APP"
+/usr/bin/codesign --verify --strict --all-architectures "$STAGED_APP"
 # Swap complete bundles atomically. A running app keeps its mapped executable;
 # the old bundle moves into our staging directory and is removed by the trap.
 swift - "$STAGED_APP" "$APP" <<'SWIFT'

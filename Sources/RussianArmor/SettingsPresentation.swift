@@ -24,7 +24,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .protection: return "Подключение VPN и условия допуска Claude."
         case .diagnostics: return "Результаты проверок, соединения и события."
-        case .general: return "Запуск приложения и хранение данных."
+        case .general: return "Запуск приложения, обновления и хранение данных."
         }
     }
 }

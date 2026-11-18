@@ -347,11 +347,14 @@ final class ProcessProtectionController: ObservableObject {
         }
 
         let remaining = liveIdentities(in: targets).count
-        isTerminatingProcesses = false
-        reason = "Не удалось закрыть все процессы Claude. Защита остаётся включённой."
-        if automaticallyMonitor { startMonitoring() }
-        enforce()
+        resumeAfterCancelledExit(reason: "Не удалось закрыть все процессы Claude. Защита остаётся включённой.")
         throw ProtectedProcessTerminationError.processesRemain(max(remaining, 1))
+    }
+
+    func resumeAfterCancelledExit(reason: String) {
+        isTerminatingProcesses = false
+        if automaticallyMonitor { startMonitoring() }
+        pause(reason)
     }
 
     func enforce() {

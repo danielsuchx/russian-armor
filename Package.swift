@@ -10,7 +10,9 @@ let package = Package(
     ],
     targets: [
         .target(name: "ArmorCore"),
-        .target(name: "ArmorTunnel", dependencies: ["ArmorCore"]),
+        .target(name: "BoundCurl", linkerSettings: [.linkedLibrary("curl")]),
+        .target(name: "ArmorTunnel", dependencies: ["ArmorCore", "BoundCurl"]),
+        .executableTarget(name: "ArmorClashReader", dependencies: ["ArmorTunnel"]),
         .executableTarget(name: "ArmorFirewall", dependencies: ["ArmorCore", "ArmorTunnel"]),
         .executableTarget(name: "RussianArmor", dependencies: ["ArmorCore", "ArmorTunnel"],
                           resources: [.copy("Resources/AppIcon.icns")]),

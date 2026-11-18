@@ -16,6 +16,30 @@ final class ApplicationWatchdogTests: XCTestCase {
         XCTAssertEqual(request.arguments, Array(arguments.dropFirst()))
     }
 
+    func testUpdateRelaunchAndRecoveryPreserveOrdinaryQuitSemantics() throws {
+        let marker = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: marker) }
+        let bundle = URL(fileURLWithPath: "/Applications/Russian Armor.app")
+        let request = try XCTUnwrap(WatchdogRequest(arguments: ["Armor", WatchdogRequest.flag, "42", "123", "0", marker.path, bundle.path]))
+        var events: [String] = []
+        func finish() {
+            ApplicationWatchdog.finish(request, pause: { events.append("pause") }, relaunch: {
+                XCTAssertEqual($0, bundle)
+                events.append("open")
+            })
+        }
+        try Data().write(to: marker)
+        finish()
+        XCTAssertTrue(events.isEmpty)
+        try Data("relaunch".utf8).write(to: marker)
+        finish()
+        XCTAssertEqual(events, ["pause", "open"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+        events.removeAll()
+        finish()
+        XCTAssertEqual(events, ["pause", "open"])
+    }
+
     func testMalformedHelperFlagExitsWithoutStartingASecondApp() {
         XCTAssertTrue(ApplicationWatchdog.runHelperIfRequested(arguments: ["RussianArmor", WatchdogRequest.flag]))
         XCTAssertFalse(ApplicationWatchdog.runHelperIfRequested(arguments: ["RussianArmor"]))

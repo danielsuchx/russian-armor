@@ -10,13 +10,14 @@ case "$CONFIGURATION" in
     *) printf 'Usage: bash scripts/build-app.sh [debug|release] [native|universal]\n' >&2; exit 2 ;;
 esac
 
-BUILD_OPTIONS=(--package-path "$ROOT" --configuration "$CONFIGURATION" --product RussianArmor)
+BUILD_OPTIONS=(--package-path "$ROOT" --configuration "$CONFIGURATION")
 case "$ARCHITECTURE" in
     native) ;;
     universal) BUILD_OPTIONS+=(--arch arm64 --arch x86_64 --scratch-path "$ROOT/.build/universal") ;;
     *) printf 'Unknown architecture: use native or universal.\n' >&2; exit 2 ;;
 esac
-swift build "${BUILD_OPTIONS[@]}"
+swift build "${BUILD_OPTIONS[@]}" --product RussianArmor
+swift build "${BUILD_OPTIONS[@]}" --product ArmorClashReader
 BIN_DIR="$(swift build "${BUILD_OPTIONS[@]}" --show-bin-path)"
 APP="$ROOT/dist/Russian Armor.app"
 mkdir -p "$ROOT/dist"
@@ -28,6 +29,13 @@ mkdir -p "$STAGED_APP/Contents/MacOS" "$STAGED_APP/Contents/Resources"
 cp -X "$ROOT/Support/Info.plist" "$STAGED_APP/Contents/Info.plist"
 cp -X "$ROOT/Sources/RussianArmor/Resources/AppIcon.icns" "$STAGED_APP/Contents/Resources/AppIcon.icns"
 cp -X "$BIN_DIR/RussianArmor" "$STAGED_APP/Contents/MacOS/RussianArmor"
+mkdir -p "$STAGED_APP/Contents/Library/LaunchDaemons"
+cp -X "$ROOT/Support/app.russian-armor.clash-reader.plist" "$STAGED_APP/Contents/Library/LaunchDaemons/"
+cp -X "$BIN_DIR/ArmorClashReader" "$STAGED_APP/Contents/MacOS/"
+if [[ "$CONFIGURATION" == release ]]; then
+    /usr/bin/strip -S -x "$STAGED_APP/Contents/MacOS/ArmorClashReader"
+fi
+/usr/bin/codesign --force --identifier app.russian-armor.clash-reader --sign - "$STAGED_APP/Contents/MacOS/ArmorClashReader"
 chmod 755 "$STAGED_APP/Contents/MacOS/RussianArmor"
 if [[ "$ARCHITECTURE" == universal ]]; then
     /usr/bin/lipo "$STAGED_APP/Contents/MacOS/RussianArmor" -verify_arch arm64 x86_64

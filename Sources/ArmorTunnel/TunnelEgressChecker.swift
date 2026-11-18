@@ -1,3 +1,4 @@
+import BoundCurl
 import ArmorCore
 import Foundation
 import Network
@@ -21,6 +22,10 @@ public enum TunnelEgressChecker {
         let result = try await service.check(primary: .ipWhoIS, allowsBackup: probeAddresses.isEmpty,
                                              mode: independentExit ? .independentExit : .addressLookup) { provider, observedIP in
             let url = try provider.lookupURL(address: observedIP)
+            if independentExit, probeAddresses.isEmpty {
+                let body = try await BoundTunnelProbe.get(url: url, interface: tunnel.interface)
+                return try EgressObservation.decode(body, provider: provider)
+            }
             let path = url.path + (url.query.map { "?" + $0 } ?? "")
             let body = try await TunnelHTTP.get(host: provider.host, path: path, interface: tunnel.interface,
                                                  address: probeAddresses[provider.host])
@@ -32,6 +37,38 @@ public enum TunnelEgressChecker {
         let after = try await withTaskCancellationHandler(operation: { try await verification.value }, onCancel: { verification.cancel() })
         guard after == tunnel else { throw TunnelCheckError.changed }
         return TunnelCheckResult(first: result.first, second: result.second, tunnel: tunnel)
+    }
+}
+
+// Unlike NWPath.availableInterfaces, an explicit IPv4 socket binding also
+// works for utun devices that are absent from the default network path.
+enum BoundTunnelProbe {
+    static func get(url: URL, interface: String) async throws -> Data {
+        let work = Task.detached(priority: .utility) {
+            try Task.checkCancellation()
+            var body = [UInt8](repeating: 0, count: 4096)
+            var length = 0, status = 0, retry = 0
+            let result = ra_tunnel_get(url.absoluteString, interface, &body, 4096, &length, &status, &retry) {
+                Task.isCancelled ? 1 : 0
+            }
+            try Task.checkCancellation()
+            if status >= 300 {
+                throw EgressError.httpFailure(status: status, retryAfter: retry > 0 ? String(retry) : nil)
+            }
+            switch result {
+            case RA_OK:
+                guard status == 200 else { throw EgressError.invalidResponse }
+                return Data(body.prefix(length))
+            case RA_BIND: throw URLError(.notConnectedToInternet)
+            case RA_TIMEOUT: throw URLError(.timedOut)
+            case RA_DNS: throw URLError(.cannotFindHost)
+            case RA_TLS: throw URLError(.secureConnectionFailed)
+            case RA_TOO_LARGE: throw EgressError.responseTooLarge
+            case RA_CANCELLED: throw CancellationError()
+            default: throw URLError(.cannotConnectToHost)
+            }
+        }
+        return try await withTaskCancellationHandler(operation: { try await work.value }, onCancel: { work.cancel() })
     }
 }
 

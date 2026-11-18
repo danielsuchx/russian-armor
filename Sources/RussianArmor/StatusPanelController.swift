@@ -37,7 +37,7 @@ private final class StatusPanelHostingView: NSHostingView<StatusPanelView> {
 }
 
 @MainActor
-final class StatusPanelController: NSObject, NSWindowDelegate {
+final class StatusPanelController: NSObject {
     let window: NSPanel
     let presentation: StatusPanelPresentation
     private var localMonitor: Any?
@@ -48,7 +48,6 @@ final class StatusPanelController: NSObject, NSWindowDelegate {
     private let scrollView = NSScrollView()
     private var placement: (anchor: NSRect, visibleFrame: NSRect)?
     private var modelSubscription: AnyCancellable?
-    private var presentationGeneration: UInt = 0
 
     init(model: AppModel, perform: @escaping (StatusPanelAction) -> Void) {
         let presentation = StatusPanelPresentation()
@@ -60,7 +59,6 @@ final class StatusPanelController: NSObject, NSWindowDelegate {
         )
         window = panel
         super.init()
-        panel.delegate = self
         panel.isReleasedWhenClosed = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -188,11 +186,15 @@ final class StatusPanelController: NSObject, NSWindowDelegate {
     }
 
     func show(anchor: NSRect, visibleFrame: NSRect) {
-        presentationGeneration &+= 1
         removeMonitors()
         placement = (anchor, visibleFrame)
         resizeToFit(height: hostingView.fittingSize.height)
         window.makeKeyAndOrderFront(nil)
+        // Menu-bar tracking can briefly take key focus from a nonactivating panel.
+        // Dismiss on an actual app/Space switch or outside click.
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspace.addObserver(self, selector: #selector(workspaceDidChange), name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        workspace.addObserver(self, selector: #selector(workspaceDidChange), name: NSWorkspace.didActivateApplicationNotification, object: nil)
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             self?.handleGlobalMouseDown(at: NSEvent.mouseLocation)
         }
@@ -224,24 +226,18 @@ final class StatusPanelController: NSObject, NSWindowDelegate {
     }
 
     func close() {
-        presentationGeneration &+= 1
         window.orderOut(nil)
         removeMonitors()
     }
 
-    func windowDidResignKey(_ notification: Notification) {
-        // Menu-bar tracking can take focus before the mouse-down action. Let
-        // that action run first, without a premature close/reopen. A queued
-        // dismissal must never hide a newer presentation.
-        let generation = presentationGeneration
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.presentationGeneration == generation,
-                  !self.window.isKeyWindow else { return }
-            self.close()
-        }
+    @objc private func workspaceDidChange(_ notification: Notification) {
+        if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+           app.processIdentifier == ProcessInfo.processInfo.processIdentifier { return }
+        close()
     }
 
     private func removeMonitors() {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
         if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
         localMonitor = nil

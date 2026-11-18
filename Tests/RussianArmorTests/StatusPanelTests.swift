@@ -245,8 +245,7 @@ final class StatusPanelTests: XCTestCase {
                 controller.panel.handleGlobalMouseDown(at: window.convertToScreen(NSRect(origin: point, size: .zero)).origin)
                 XCTAssertTrue(controller.panel.window.isVisible, "The anchor click belongs to the button action")
                 // Menu-bar tracking can take key focus before invoking the action.
-                controller.panel.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification,
-                                                                 object: controller.panel.window))
+                controller.panel.window.resignKey()
             }
             XCTAssertTrue(button.sendAction(try XCTUnwrap(button.action), to: button.target))
         }
@@ -264,24 +263,22 @@ final class StatusPanelTests: XCTestCase {
         XCTAssertFalse(controller.panel.window.isVisible)
     }
 
-    func testFocusLossClosesPanelButCannotDismissANewerPresentation() async throws {
+    func testTransientFocusLossDuringLaunchKeepsPanelOpenUntilDismissed() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["RUSSIAN_ARMOR_RENDER_PANEL_TESTS"] == "1",
                          "Opt-in GUI focus lifecycle check")
         _ = NSApplication.shared
-        let panel = StatusPanelController(model: try model()) { _ in }
+        let model = try model()
+        let panel = StatusPanelController(model: model) { _ in }
         defer { panel.close() }
         let screen = try XCTUnwrap(NSScreen.main).visibleFrame
         let anchor = NSRect(x: screen.midX, y: screen.maxY, width: 24, height: 24)
         panel.show(anchor: anchor, visibleFrame: screen)
         panel.window.resignKey()
-        panel.close()
-        panel.show(anchor: anchor, visibleFrame: screen)
-        try await Task.sleep(nanoseconds: 20_000_000)
-        XCTAssertTrue(panel.window.isVisible, "A stale focus-loss dismissal must not close a reopened panel")
-
-        panel.window.resignKey()
-        try await Task.sleep(nanoseconds: 20_000_000)
-        XCTAssertFalse(panel.window.isVisible, "Ordinary focus loss should still dismiss the panel")
+        model.refreshDiagnostics()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(panel.window.isVisible, "A transient key change must not dismiss the status panel")
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        XCTAssertFalse(panel.window.isVisible)
 
         panel.show(anchor: anchor, visibleFrame: screen)
         panel.handleGlobalMouseDown(at: NSPoint(x: screen.minX, y: screen.minY))

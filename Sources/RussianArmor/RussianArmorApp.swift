@@ -47,6 +47,7 @@ private final class ArmorApplicationDelegate: NSObject, NSApplicationDelegate {
     private let watchdog: ApplicationWatchdog?
     private var watchdogTimer: Timer?
     private var terminationInProgress = false
+    private var relaunchAfterUpdate = false
 
     init(watchdog: ApplicationWatchdog?) {
         self.watchdog = watchdog
@@ -55,6 +56,7 @@ private final class ArmorApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let model = AppModel()
         self.model = model
+        Task { await model.tunnelReaderRegistration.migrateEnabledReader() }
         let windows = ArmorWindows(model: model)
         self.windows = windows
         statusMenu = NativeStatusMenu(model: model) { [weak windows] kind in windows?.open(kind) }
@@ -87,25 +89,51 @@ private final class ArmorApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard model?.processProtection != nil else { return .terminateNow }
+        guard let model else { return .terminateNow }
         if terminationInProgress { return .terminateLater }
+        let update = model.updater.prepared
+        guard model.processProtection != nil || update != nil else { return .terminateNow }
         let alert = NSAlert()
-        alert.messageText = "Закрыть Claude и выйти?"
+        alert.messageText = update == nil ? "Закрыть Claude и выйти?" : "Закрыть Claude и установить обновление?"
         alert.icon = AppIcon.image
         alert.informativeText = "Сначала Russian Armor закроет распознанные процессы Claude Desktop и Claude Code. Только после этого завершится само приложение. Если Claude закрыть не удастся, выход будет отменён и защита продолжит работать."
+        if update != nil {
+            alert.informativeText = "Russian Armor закроет Claude Desktop и Claude Code, установит проверенную версию и запустится снова."
+        }
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Оставить защиту включённой")
-        alert.addButton(withTitle: "Закрыть Claude и выйти")
-        guard alert.runModal() == .alertSecondButtonReturn else { return .terminateCancel }
+        alert.addButton(withTitle: update == nil ? "Закрыть Claude и выйти" : "Установить и перезапустить")
+        guard alert.runModal() == .alertSecondButtonReturn else {
+            if update != nil { model.updater.discard() }
+            return .terminateCancel
+        }
 
         terminationInProgress = true
         Task { [weak self, weak sender] in
             guard let self, let sender else { return }
             do {
-                try await model?.closeClaudeBeforeApplicationExit()
+                if update == nil {
+                    await model.updater.cancelDownloadForExit()
+                } else if watchdog?.isHealthy != true {
+                    throw AppUpdateError.watchdog
+                }
+                try await model.closeClaudeBeforeApplicationExit()
+                if let update {
+                    do {
+                        guard watchdog?.isHealthy == true else { throw AppUpdateError.watchdog }
+                        try update.install()
+                    } catch {
+                        model.processProtection?.resumeAfterCancelledExit(reason: "Установка прервана. Проверяем защиту.")
+                        model.refreshExternalIP()
+                        throw error
+                    }
+                    relaunchAfterUpdate = true
+                    model.updater.discard()
+                }
                 sender.reply(toApplicationShouldTerminate: true)
             } catch {
                 terminationInProgress = false
+                if update != nil { model.updater.discard(error: error) }
                 let failure = NSAlert()
                 failure.messageText = "Russian Armor остаётся запущенным"
                 failure.informativeText = (error as? LocalizedError)?.errorDescription
@@ -123,7 +151,7 @@ private final class ArmorApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         watchdogTimer?.invalidate()
         do {
-            try watchdog?.markCleanExit()
+            try watchdog?.markCleanExit(relaunch: relaunchAfterUpdate)
         } catch {
             model?.recordWatchdogError("Watchdog: ошибка при выходе", detail: error.localizedDescription)
         }

@@ -87,10 +87,11 @@ final class ApplicationWatchdog: @unchecked Sendable {
         }
     }
 
-    func markCleanExit() throws {
-        cleanExitMarked = true
+    func markCleanExit(relaunch: Bool = false) throws {
         do {
-            try Data().write(to: request.cleanExitURL, options: .atomic)
+            let marker = relaunch ? Data("relaunch".utf8) : Data()
+            try marker.write(to: request.cleanExitURL, options: .atomic)
+            cleanExitMarked = true
         } catch {
             throw WatchdogError.markerFileCleanupFailed(error.localizedDescription)
         }
@@ -119,21 +120,29 @@ final class ApplicationWatchdog: @unchecked Sendable {
         while ProtectedProcessCatalog.identity(for: request.parent.pid) == request.parent {
             usleep(100_000)
         }
-        if FileManager.default.fileExists(atPath: request.cleanExitURL.path) {
-            try? FileManager.default.removeItem(at: request.cleanExitURL)
-            return true
-        }
+        finish(request, pause: pauseProtectedProcesses, relaunch: openApplication)
+        return true
+    }
 
-        pauseProtectedProcesses()
+    static func finish(_ request: WatchdogRequest, pause: () -> Void, relaunch: (URL) -> Void) {
+        if let marker = try? Data(contentsOf: request.cleanExitURL) {
+            try? FileManager.default.removeItem(at: request.cleanExitURL)
+            if marker.isEmpty { return }
+        }
+        // Recovery and update relaunch both cover Claude processes that appear
+        // after the old instance closes its last protected process.
+        pause()
+        relaunch(request.bundleURL)
+    }
+
+    private static func openApplication(_ bundle: URL) {
         let opener = Process()
         opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        opener.arguments = ["-n", request.bundleURL.path]
+        opener.arguments = ["-n", bundle.path]
         opener.standardInput = FileHandle.nullDevice
         opener.standardOutput = FileHandle.nullDevice
         opener.standardError = FileHandle.nullDevice
-        try? opener.run()
-        opener.waitUntilExit()
-        return true
+        if (try? opener.run()) != nil { opener.waitUntilExit() }
     }
 
     private static func pauseProtectedProcesses() {

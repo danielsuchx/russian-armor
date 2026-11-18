@@ -275,6 +275,9 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
+            settingsGroup("Обновления") {
+                UpdateControls(updater: model.updater)
+            }
             settingsGroup("О приложении") {
                 Text("Russian Armor").font(.headline)
                 if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {

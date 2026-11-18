@@ -46,6 +46,9 @@ private enum ClaudeDesktopLauncher {
 
 @MainActor
 final class AppModel: ObservableObject {
+    let updater = ApplicationUpdater()
+    let tunnelReaderRegistration = TunnelReaderRegistration()
+
     struct CountryComparison: Equatable {
         let ipWhoIS: String
         let independentCountry: String

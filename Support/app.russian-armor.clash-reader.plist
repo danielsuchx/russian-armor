@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>app.russian-armor.clash-reader</string>
+    <key>BundleProgram</key><string>Contents/MacOS/ArmorClashReader</string>
+    <key>MachServices</key>
+    <dict><key>app.russian-armor.clash-reader</key><true/></dict>
+</dict>
+</plist>

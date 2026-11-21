@@ -3,12 +3,24 @@ import Foundation
 
 // Presentation only: these labels never grant permission or change protection policy.
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case protection, diagnostics, general
+    case protection, network, routes, audit, coverage, backup, diagnostics, guides, general
+
+    static let navigationGroups: [(String, [Self])] = [
+        ("", [.general, .protection]),
+        ("Подключение", [.network, .routes, .coverage]),
+        ("Инструменты", [.audit, .backup, .diagnostics, .guides])
+    ]
 
     var id: Self { self }
     var title: String {
         switch self {
         case .protection: return "Защита"
+        case .network: return "Сетевой шлюз"
+        case .routes: return "Маршруты"
+        case .audit: return "Проверки сети"
+        case .coverage: return "Приложения"
+        case .backup: return "Профили"
+        case .guides: return "Помощь"
         case .diagnostics: return "Диагностика"
         case .general: return "Основные"
         }
@@ -16,6 +28,12 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .protection: return "shield.lefthalf.filled"
+        case .network: return "network"
+        case .routes: return "point.3.connected.trianglepath.dotted"
+        case .audit: return "checklist"
+        case .coverage: return "app.connected.to.app.below.fill"
+        case .backup: return "externaldrive"
+        case .guides: return "book"
         case .diagnostics: return "waveform.path.ecg"
         case .general: return "gearshape"
         }
@@ -23,6 +41,12 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .protection: return "Подключение VPN и условия допуска Claude."
+        case .network: return "Локальный шлюз, остановка трафика и настройки системы."
+        case .routes: return "Общий выход и отдельные маршруты Claude, ChatGPT и Gemini."
+        case .audit: return "14 проверок выхода, DNS и окружения для каждого сервиса."
+        case .coverage: return "Настройка и подтверждение трафика приложений через шлюз."
+        case .backup: return "Профили Claude Desktop, архив Claude Code и очистка сессий."
+        case .guides: return "Подключение своего сервера, настройки ОС и проверка BIN."
         case .diagnostics: return "Результаты проверок, соединения и события."
         case .general: return "Запуск приложения, обновления и хранение данных."
         }
@@ -53,7 +77,7 @@ struct SettingsProtectionContent {
             switch protection {
             case .countryConfirmed:
                 title = "Страна подтверждена"
-                detail = "Контроль страны включён. При смене сети, страны или сбое Russian Armor ставит процессы Claude на паузу."
+                detail = "При изменении сети или сбое Claude будет поставлен на паузу."
                 tone = .confirmed
             case .channelEnabled:
                 title = protection.title

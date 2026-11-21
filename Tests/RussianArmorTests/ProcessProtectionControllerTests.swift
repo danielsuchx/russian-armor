@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Combine
 import XCTest
 import ArmorCore
 @testable import RussianArmor
@@ -67,6 +68,49 @@ final class ProcessProtectionControllerTests: XCTestCase {
         liveIdentity = nil
         controller.shutdown()
         XCTAssertEqual(signals.map(\.1), [SIGSTOP, SIGCONT, SIGSTOP], "Exited or reused PID must not receive SIGCONT")
+    }
+
+    func testAllowedIdleSkipsScansButRevokingAccessDiscoversAndStopsNewChildren() {
+        var records: [ProtectedProcessRecord] = []
+        var reads = 0
+        var stopped = Set<pid_t>()
+        let controller = ProcessProtectionController(
+            automaticallyMonitor: false,
+            processReader: { reads += 1; return records },
+            identityReader: { pid in records.first { $0.identity.pid == pid }?.identity },
+            signaler: { pid, signal in
+                if signal == SIGSTOP { stopped.insert(pid) }
+                if signal == SIGCONT { stopped.remove(pid) }
+                return 0
+            },
+            isStopped: { stopped.contains($0) }
+        )
+        let allow = AccessRules(allowedCountries: ["DE"]).evaluate(ip: "203.0.113.7", countries: ["DE"])
+        let deny = AccessRules(allowedCountries: ["NL"]).evaluate(ip: "203.0.113.7", countries: ["DE"])
+        controller.apply([.desktop: allow, .code: allow], country: "DE")
+        let idleReads = reads
+        var notifications = 0
+        let subscription = controller.objectWillChange.sink { notifications += 1 }
+        defer { subscription.cancel() }
+        for _ in 0..<20 { controller.enforce() }
+        XCTAssertEqual(reads, idleReads, "Allowed idle ticks must not enumerate all user processes")
+        XCTAssertEqual(notifications, 0, "An unchanged status must not redraw the interface")
+
+        records = [record(90001, path: "/fixture/claude")]
+        controller.apply([.desktop: allow, .code: deny], country: "DE")
+        XCTAssertTrue(stopped.contains(90001), "Revoking access must immediately scan even after idle ticks")
+        records.append(record(90002, parent: 90001, path: "/bin/sh"))
+        controller.enforce()
+        XCTAssertTrue(stopped.contains(90002), "Denied apps must still discover new descendants on every tick")
+        stopped.remove(90002)
+        controller.enforce()
+        XCTAssertTrue(stopped.contains(90002), "An external resume must not bypass the denied policy")
+
+        controller.apply([.desktop: allow, .code: allow], country: "DE")
+        XCTAssertTrue(stopped.isEmpty)
+        records.append(record(90003, parent: 90001, path: "/usr/bin/git"))
+        XCTAssertEqual(controller.monitoredProcessIdentities().count, 3)
+        XCTAssertEqual(controller.status, .active("DE", 3), "The route monitor must still refresh process discovery and counts")
     }
 
     func testShutdownTerminatesPausedClaudeBeforeReleasingApplication() async throws {

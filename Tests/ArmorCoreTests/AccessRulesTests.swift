@@ -36,6 +36,16 @@ final class AccessRulesTests: XCTestCase {
         XCTAssertFalse(rules.evaluate(ip: "203.0.113.8", countries: ["NL", "DE"]).allowed)
     }
 
+    func testIndependentCountryMismatchUsesAuthorityButHonorsExplicitSecondaryDeny() {
+        let rules = AccessRules(allowedCountries: ["DE"], deniedCountries: [])
+        XCTAssertTrue(rules.evaluateIndependent(ip: "203.0.113.8", authoritativeCountry: "DE",
+                                                secondaryCountry: "SC").allowed)
+
+        let denying = AccessRules(allowedCountries: ["DE", "SC"], deniedCountries: ["SC"])
+        XCTAssertFalse(denying.evaluateIndependent(ip: "203.0.113.8", authoritativeCountry: "DE",
+                                                   secondaryCountry: "SC").allowed)
+    }
+
     func testUnknownEmptyInvalidAndConflictingRulesFailClosed() {
         XCTAssertFalse(AccessRules().evaluate(ip: "203.0.113.1", countries: ["NL"]).allowed)
         let rules = AccessRules(allowedCountries: ["NL"])

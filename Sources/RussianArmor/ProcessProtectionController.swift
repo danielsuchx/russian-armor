@@ -67,7 +67,7 @@ enum ProtectedProcessCatalog {
         var applications: [ProtectedProcessIdentity: ProtectedApplication] = [:]
         var queue = records.filter { record in
             if record.isClaudeDesktopRoot || record.isClaudeCodeInterpreter { return true }
-            let executable = URL(fileURLWithPath: record.executablePath).lastPathComponent.lowercased()
+            let executable = record.executablePath.split(separator: "/").last?.lowercased() ?? ""
             return codeExecutableNames.contains(executable)
                 || codeExecutableNames.contains(record.processName.lowercased())
                 || record.executablePath.contains("/.local/share/claude/versions/")
@@ -106,28 +106,35 @@ enum ProtectedProcessCatalog {
         let processName = withUnsafeBytes(of: &mutableInfo.pbi_name) {
             String(bytes: $0.prefix(while: { $0 != 0 }), encoding: .utf8)
         } ?? ""
-        let executableName = URL(fileURLWithPath: path).lastPathComponent.lowercased()
+        let executableName = path.split(separator: "/").last?.lowercased() ?? ""
         let isInterpreter = interpreterNames.contains(executableName)
             || interpreterNames.contains(processName.lowercased())
         return .init(
             identity: .init(pid: pid, startSeconds: info.pbi_start_tvsec, startMicroseconds: info.pbi_start_tvusec),
             parentPID: pid_t(info.pbi_ppid), executablePath: path, processName: processName,
-            isClaudeDesktopRoot: desktopPIDs.contains(pid),
+            isClaudeDesktopRoot: desktopPIDs.contains(pid) || (
+                ["google chrome", "brave browser", "chromium", "microsoft edge"].contains(executableName)
+                    && ClaudeBrowserLauncher.isProtectedProfile(arguments: commandLineArguments(pid: pid))
+            ),
             isClaudeCodeInterpreter: isInterpreter && commandLineContainsClaudeCode(pid: pid)
         )
     }
 
     private static func commandLineContainsClaudeCode(pid: pid_t) -> Bool {
+        commandLineArguments(pid: pid).contains { $0.lowercased().contains(claudeCodeArgumentMarker) }
+    }
+
+    private static func commandLineArguments(pid: pid_t) -> [String] {
         var mib = [CTL_KERN, KERN_PROCARGS2, pid]
         var size = 0
         guard sysctl(&mib, u_int(mib.count), nil, &size, nil, 0) == 0,
               size > MemoryLayout<Int32>.size,
-              size <= 1_048_576 else { return false }
+              size <= 1_048_576 else { return [] }
         var bytes = [UInt8](repeating: 0, count: size)
         let result = bytes.withUnsafeMutableBytes { storage in
             sysctl(&mib, u_int(mib.count), storage.baseAddress, &size, nil, 0)
         }
-        guard result == 0, size <= bytes.count else { return false }
+        guard result == 0, size <= bytes.count else { return [] }
         bytes.removeSubrange(size..<bytes.count)
 
         var argumentCount: Int32 = 0
@@ -136,22 +143,22 @@ enum ProtectedProcessCatalog {
                 destination.copyBytes(from: source.prefix(MemoryLayout<Int32>.size))
             }
         }
-        guard argumentCount > 0, argumentCount < 4_096 else { return false }
+        guard argumentCount > 0, argumentCount < 4_096 else { return [] }
 
         var cursor = MemoryLayout<Int32>.size
         while cursor < bytes.count, bytes[cursor] != 0 { cursor += 1 } // executable path
         while cursor < bytes.count, bytes[cursor] == 0 { cursor += 1 }
+        var arguments: [String] = []
         for _ in 0..<Int(argumentCount) {
             let start = cursor
             while cursor < bytes.count, bytes[cursor] != 0 { cursor += 1 }
             if start < cursor {
-                let argument = String(decoding: bytes[start..<cursor], as: UTF8.self).lowercased()
-                if argument.contains(claudeCodeArgumentMarker) { return true }
+                arguments.append(String(decoding: bytes[start..<cursor], as: UTF8.self))
             }
             while cursor < bytes.count, bytes[cursor] == 0 { cursor += 1 }
             if cursor >= bytes.count { break }
         }
-        return false
+        return arguments
     }
 
     static func isStopped(_ pid: pid_t) -> Bool? {
@@ -183,7 +190,11 @@ final class ProcessProtectionController: ObservableObject {
     typealias IdentityReader = (pid_t) -> ProtectedProcessIdentity?
     typealias Signaler = (pid_t, Int32) -> Int32
 
-    @Published private(set) var status: Status = .checking(0)
+    @Published private var storedStatus: Status = .checking(0)
+    private(set) var status: Status {
+        get { storedStatus }
+        set { if storedStatus != newValue { storedStatus = newValue } }
+    }
     private(set) var suspended = Set<ProtectedProcessIdentity>()
     private var isSafe = false
     private var safeCountry: String?
@@ -200,6 +211,7 @@ final class ProcessProtectionController: ObservableObject {
     private var isTerminatingProcesses = false
     private var lastPersisted: Set<ProtectedProcessIdentity>?
     private var timer: AnyCancellable?
+    private var lastProcessCount = 0
 
     init(
         automaticallyMonitor: Bool = true,
@@ -227,7 +239,9 @@ final class ProcessProtectionController: ObservableObject {
     }
 
     func monitoredProcessIdentities() -> Set<TrafficProcess.ID> {
-        Set(processReader().map {
+        let records = readProcesses()
+        if case .active(let country, _) = status { status = .active(country, records.count) }
+        return Set(records.map {
             TrafficProcess.ID(pid: $0.identity.pid, startSeconds: $0.identity.startSeconds,
                               startMicroseconds: $0.identity.startMicroseconds)
         })
@@ -366,7 +380,7 @@ final class ProcessProtectionController: ObservableObject {
             if !suspended.isEmpty { updateResumedStatus() }
             return
         }
-        let records = processReader()
+        let records = readProcesses()
         var failures = 0
         for record in records {
             guard identityReader(record.identity.pid) == record.identity else { continue }
@@ -399,12 +413,19 @@ final class ProcessProtectionController: ObservableObject {
     }
 
     private func enforceApplications(_ decisions: [ProtectedApplication: AccessDecision]) {
-        let records = processReader()
+        let allAllowed = ProtectedApplication.allCases.allSatisfy { decisions[$0]?.allowed == true }
+        // There is nothing to stop or resume while both apps are allowed. The
+        // route monitor still discovers processes every second; denied apps
+        // retain the original 250 ms enforcement and identity checks.
+        if allAllowed, suspended.isEmpty, !persistenceFailed, !recoveryFailed, let safeCountry {
+            status = .active(safeCountry, lastProcessCount)
+            return
+        }
+        let records = readProcesses()
         let denied = records.filter { decisions[$0.application]?.allowed != true }
         // Pause newly forbidden processes before resuming newly allowed ones.
         let savedDecisions = applicationDecisions
         applicationDecisions = nil
-        let allAllowed = ProtectedApplication.allCases.allSatisfy { decisions[$0]?.allowed == true }
         reason = ProtectedApplication.allCases.compactMap { application -> String? in
             guard let decision = decisions[application], !decision.allowed else { return nil }
             return "\(application.title): \(decision.explanation)"
@@ -468,7 +489,7 @@ final class ProcessProtectionController: ObservableObject {
             isSafe = false
             enforce()
         } else if let safeCountry {
-            status = .active(safeCountry, processReader().count)
+            status = .active(safeCountry, readProcesses().count)
         }
     }
 
@@ -487,9 +508,15 @@ final class ProcessProtectionController: ObservableObject {
     }
 
     private func currentProtectedIdentities() -> [ProtectedProcessIdentity] {
-        processReader().compactMap { record in
+        readProcesses().compactMap { record in
             identityReader(record.identity.pid) == record.identity ? record.identity : nil
         }
+    }
+
+    private func readProcesses() -> [ProtectedProcessRecord] {
+        let records = processReader()
+        lastProcessCount = records.count
+        return records
     }
 
     private func liveIdentities(in identities: Set<ProtectedProcessIdentity>) -> Set<ProtectedProcessIdentity> {

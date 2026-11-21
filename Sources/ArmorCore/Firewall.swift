@@ -31,11 +31,14 @@ public struct FirewallConfiguration: Codable, Equatable, Sendable {
     public let endpoints: [VPNEndpoint]
     public let probeAddresses: [String: String]
     public let rules: AccessRules
+    public let ownedVPN: OwnedVPNConfiguration?
 
     public init(version: Int = 1, physicalInterface: String, vpnOwnerKey: String,
-                endpoints: [VPNEndpoint], probeAddresses: [String: String], rules: AccessRules) {
+                endpoints: [VPNEndpoint], probeAddresses: [String: String], rules: AccessRules,
+                ownedVPN: OwnedVPNConfiguration? = nil) {
         self.version = version; self.physicalInterface = physicalInterface; self.vpnOwnerKey = vpnOwnerKey
         self.endpoints = endpoints; self.probeAddresses = probeAddresses; self.rules = rules
+        self.ownedVPN = ownedVPN
     }
     public var isValid: Bool {
         let owner = vpnOwnerKey.split(separator: "/", omittingEmptySubsequences: false)
@@ -44,6 +47,7 @@ public struct FirewallConfiguration: Codable, Equatable, Sendable {
             && !endpoints.isEmpty && endpoints.count <= 16 && endpoints.allSatisfy(\.isValid)
             && Set(probeAddresses.keys) == ["ipwho.is", "ipinfo.io"] && probeAddresses.values.allSatisfy(Self.isIPv4)
             && rules.isValid && !rules.allowedCountries.isEmpty
+            && (ownedVPN == nil || (ownedVPN!.isValid && endpoints.count == 1 && endpoints[0].transport == "udp"))
     }
     public static func interface(_ text: String, prefix: String) -> Bool {
         let suffix = text.dropFirst(prefix.count)
@@ -80,12 +84,13 @@ public enum FirewallRules {
         guard configuration.isValid, tunnel?.isValid != false, !allowTraffic || tunnel != nil else { throw FirewallError.invalidConfiguration }
         var lines = ["# Russian Armor: whole-Mac egress guard", "pass quick on lo0 all no state"]
         let physical = configuration.physicalInterface
+        let bootstrapUser = configuration.ownedVPN == nil ? "" : " user 0"
         // IPv4 network renewal only; no general LAN, DNS, captive portal or IPv6 exception.
-        lines += ["pass out quick on \(physical) inet proto udp from any port 68 to 255.255.255.255 port 67 no state",
+        lines += ["pass out quick on \(physical) inet proto udp from any port 68 to 255.255.255.255 port 67\(bootstrapUser) no state",
                   "pass in quick on \(physical) inet proto udp from any port 67 to any port 68 no state"]
         for endpoint in configuration.endpoints {
             let flags = endpoint.transport == "tcp" ? " flags any" : ""
-            lines += ["pass out quick on \(physical) inet proto \(endpoint.transport) from any to \(endpoint.address) port \(endpoint.port)\(flags) no state",
+            lines += ["pass out quick on \(physical) inet proto \(endpoint.transport) from any to \(endpoint.address) port \(endpoint.port)\(bootstrapUser)\(flags) no state",
                       "pass in quick on \(physical) inet proto \(endpoint.transport) from \(endpoint.address) port \(endpoint.port) to any\(flags) no state"]
         }
         if let tunnel {
@@ -154,8 +159,10 @@ public struct FirewallStatus: Codable, Equatable, Sendable {
     public let updatedAt: Date
     public let detail: String
     public let interface: String?
-    public init(state: State, updatedAt: Date = Date(), detail: String, interface: String? = nil) {
+    public let policy: String?
+    public init(state: State, updatedAt: Date = Date(), detail: String, interface: String? = nil, policy: String? = nil) {
         self.state = state; self.updatedAt = updatedAt; self.detail = detail; self.interface = interface
+        self.policy = policy
     }
     public func isFresh(at date: Date) -> Bool { (0...6).contains(date.timeIntervalSince(updatedAt)) }
 }

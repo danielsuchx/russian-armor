@@ -44,12 +44,20 @@ fileprivate struct BundleIdentity: Equatable {
 enum UpdateInstaller {
     private static let bundleID = "app.russian-armor.desktop"
 
-    static func download(_ update: GitHubUpdate, to destination: URL, current: ReleaseVersion, session: URLSession) async throws -> PreparedUpdate {
+    static func download(_ update: GitHubUpdate, to destination: URL, current: ReleaseVersion, session: URLSession, allowRollback: Bool = false) async throws -> PreparedUpdate {
         let (image, response) = try await session.download(from: update.url)
         defer { try? FileManager.default.removeItem(at: image) }
         try GitHubUpdate.validate(response)
+        let (signatureBytes, signatureResponse) = try await session.bytes(from: update.signatureURL)
+        try GitHubUpdate.validate(signatureResponse)
+        var signature = Data()
+        for try await byte in signatureBytes {
+            guard signature.count < 256 else { throw AppUpdateError.signature }
+            signature.append(byte)
+        }
+        try UpdateSignature.verify(signature, update: update, publicKey: UpdateSignature.bundledPublicKey())
         return try await Task.detached(priority: .utility) {
-            try prepare(image: image, update: update, destination: destination, current: current)
+            try prepare(image: image, update: update, destination: destination, current: current, allowRollback: allowRollback)
         }.value
     }
 
@@ -64,9 +72,9 @@ enum UpdateInstaller {
         guard actual == update.sha256 else { throw AppUpdateError.invalidDownload }
     }
 
-    static func prepare(image: URL, update: GitHubUpdate, destination: URL, current: ReleaseVersion) throws -> PreparedUpdate {
+    static func prepare(image: URL, update: GitHubUpdate, destination: URL, current: ReleaseVersion, allowRollback: Bool = false) throws -> PreparedUpdate {
         let fm = FileManager.default
-        guard update.version > current, destination.pathExtension == "app",
+        guard (allowRollback ? update.version < current : update.version > current), destination.pathExtension == "app",
               !destination.pathComponents.contains("AppTranslocation"),
               fm.isWritableFile(atPath: destination.deletingLastPathComponent().path) else { throw AppUpdateError.destination }
         let identity = try BundleIdentity(destination)

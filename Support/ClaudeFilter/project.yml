@@ -1,0 +1,46 @@
+name: ArmorClaudeFilter
+options:
+  deploymentTarget:
+    macOS: '13.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    CODE_SIGN_STYLE: Automatic
+    MACOSX_DEPLOYMENT_TARGET: '13.0'
+    ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGN_ENTITLEMENTS: ../../Support/ClaudeFilter/Filter.entitlements
+    INFOPLIST_FILE: ../../Support/ClaudeFilter/Info.plist
+    SKIP_INSTALL: NO
+    PRODUCT_BUNDLE_IDENTIFIER: app.russian-armor.claude-filter
+    MARKETING_VERSION: '0.3.1'
+    CURRENT_PROJECT_VERSION: '1'
+packages:
+  RussianArmor:
+    path: ../..
+targets:
+  ArmorClaudeFilter:
+    type: system-extension
+    platform: macOS
+    sources:
+      - path: ../../Sources/ClaudeNetworkFilter
+    dependencies:
+      - package: RussianArmor
+        product: ArmorCore
+      - package: RussianArmor
+        product: ArmorFilterIPC
+      - sdk: NetworkExtension.framework
+      - sdk: SystemExtensions.framework
+  ArmorFilterHost:
+    type: application
+    platform: macOS
+    sources:
+      - path: Host
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.russian-armor.desktop
+        CODE_SIGN_ENTITLEMENTS: ../../Support/ClaudeFilter/Host.entitlements
+        INFOPLIST_FILE: ../../Support/Info.plist
+    dependencies:
+      - target: ArmorClaudeFilter
+        embed: true
+        codeSign: true

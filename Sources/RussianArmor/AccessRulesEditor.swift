@@ -98,6 +98,7 @@ struct AccessRulesEditor: View {
 }
 
 private struct RulesFields: View {
+    @Environment(\.networkAddressesHidden) private var hideIP
     let title: String
     @Binding var draft: AccessRulesDraft
     var body: some View {
@@ -105,18 +106,23 @@ private struct RulesFields: View {
             Text(title).font(.headline)
             TextField("Разрешённые страны: NL, SE", text: $draft.countries).textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Разрешённые страны — \(title)")
-            Text("Пустой список стран ничего не разрешает. При расхождении геобаз обе страны должны быть разрешены.")
+            Text("Пустой список стран ничего не разрешает. При расхождении геобаз для разрешения используется ipwho.is; явный запрет второй страны сохраняется.")
                 .font(AppTypography.description).foregroundStyle(.secondary)
             TextField("Запрещённые страны: например RU", text: $draft.deniedCountries).textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Запрещённые страны — \(title)")
             Text("Разрешённые IP / CIDR · необязательно").font(AppTypography.description)
-            TextEditor(text: $draft.ips).font(AppTypography.description.monospaced()).frame(height: 55)
-                .border(.secondary.opacity(0.3)).accessibilityLabel("Разрешённые IP — \(title)")
-            Text("Пусто — любой IP разрешённой страны. Примеры формата: 203.0.113.7, 203.0.113.0/24, 2001:db8::/32.")
-                .font(AppTypography.description).foregroundStyle(.secondary)
-            Text("Запрещённые IP / CIDR · необязательно").font(AppTypography.description)
-            TextEditor(text: $draft.deniedIPs).font(AppTypography.description.monospaced()).frame(height: 55)
-                .border(.secondary.opacity(0.3)).accessibilityLabel("Запрещённые IP — \(title)")
+            if hideIP {
+                Text("Адреса скрыты. Для редактирования IP выключите «Скрывать IP» в основных настройках.")
+                    .font(AppTypography.description).foregroundStyle(.secondary)
+            } else {
+                TextEditor(text: $draft.ips).font(AppTypography.description.monospaced()).frame(height: 55)
+                    .border(.secondary.opacity(0.3)).accessibilityLabel("Разрешённые IP — \(title)")
+                Text("Пусто — любой IP разрешённой страны. Примеры формата: 203.0.113.7, 203.0.113.0/24, 2001:db8::/32.")
+                    .font(AppTypography.description).foregroundStyle(.secondary)
+                Text("Запрещённые IP / CIDR · необязательно").font(AppTypography.description)
+                TextEditor(text: $draft.deniedIPs).font(AppTypography.description.monospaced()).frame(height: 55)
+                    .border(.secondary.opacity(0.3)).accessibilityLabel("Запрещённые IP — \(title)")
+            }
         }
     }
 }

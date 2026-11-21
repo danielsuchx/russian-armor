@@ -130,6 +130,22 @@ public struct AccessRules: Equatable, Codable, Sendable {
                      ? "Страна разрешена; явных запретов нет."
                      : "Страна и IP разрешены; явных запретов нет.")
     }
+
+    /// Evaluate an independent exit check where `authoritativeCountry` comes
+    /// from ipwho.is and the optional secondary country is diagnostic. A
+    /// country explicitly denied by the user remains blocking even when the
+    /// GeoIP databases disagree about the same public IP.
+    public func evaluateIndependent(ip: String?, authoritativeCountry: String,
+                                    secondaryCountry: String? = nil) -> AccessDecision {
+        let primary = evaluate(ip: ip, countries: [authoritativeCountry])
+        guard primary.allowed,
+              let secondaryCountry,
+              secondaryCountry != authoritativeCountry,
+              deniedCountries.contains(secondaryCountry) else {
+            return primary
+        }
+        return evaluate(ip: ip, countries: [authoritativeCountry, secondaryCountry])
+    }
 }
 
 public struct AccessProfile: Equatable, Identifiable, Codable, Sendable {

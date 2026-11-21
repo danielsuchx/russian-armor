@@ -2,6 +2,7 @@ import ArmorCore
 import SwiftUI
 
 struct ConnectionDiagnosticsView: View {
+    @Environment(\.networkAddressesHidden) private var hideIP
     @ObservedObject var monitor: ConnectionDiagnosticsMonitor
     @Binding var enabled: Bool
     let expectedIP: String?
@@ -21,7 +22,7 @@ struct ConnectionDiagnosticsView: View {
                 case .observed(let snapshot):
                     Text(snapshot.dnsServers.isEmpty
                          ? "Адреса DNS-серверов недоступны. Это не означает отсутствие DNS."
-                         : "DNS в конфигурации macOS: \(snapshot.dnsServers.joined(separator: ", "))")
+                         : "DNS в конфигурации macOS: \(hideIP ? EnginePrivacy.display(snapshot.dnsServers.joined(separator: ", ")) : snapshot.dnsServers.joined(separator: ", "))")
                         .textSelection(.enabled)
                     ForEach(ServiceProbe.allCases, id: \.self) { service in
                         if let result = snapshot.services[service] {
@@ -29,7 +30,7 @@ struct ConnectionDiagnosticsView: View {
                                 Text(service.title).font(.subheadline.weight(.semibold))
                                 switch result {
                                 case .observed(let address):
-                                    Text(address).textSelection(.enabled)
+                                    Text(hideIP ? EnginePrivacy.display(address) : address).textSelection(.enabled)
                                     Text(Self.comparison(address, expectedIP: expectedIP))
                                         .font(.caption).foregroundStyle(.secondary)
                                 case .unavailable(let message):

@@ -18,6 +18,15 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
     private var refreshItem: NSMenuItem!
     private var noteItem: NSMenuItem!
     private var eventsHeadingItem: NSMenuItem!
+    private var menuIsOpen = false
+    private var displayedIndicator: ProtectionIndicator?
+    private var displayedSymbol: String?
+    private var indicator: ProtectionIndicator {
+        ProtectionIndicator.resolve(protection: model.protection,
+                                    packetGuardRequired: model.packetGuard.required,
+                                    firewallStatus: model.packetGuard.status,
+                                    sleeping: model.isSleeping)
+    }
     private(set) lazy var panel = StatusPanelController(model: model) { [weak self] action in
         self?.performPanelAction(action)
     }
@@ -33,18 +42,19 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         buildMenu()
         if createStatusItem {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-            item.button?.image = symbol(model.protection.symbol, size: Self.statusBarSymbolSize)
-            item.button?.imagePosition = .imageOnly
-            item.button?.setAccessibilityLabel("Russian Armor — \(model.protection.title.lowercased())")
-            item.button?.toolTip = "Russian Armor · нажмите, чтобы открыть панель"
+            statusItem = item
+            applyStatusIndicator()
             item.button?.target = self
             item.button?.action = #selector(togglePanel(_:))
             item.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
-            statusItem = item
         }
         subscription = Publishers.Merge(model.objectWillChange, model.traffic.objectWillChange)
             .receive(on: RunLoop.main)
-            .sink { [weak self] in self?.updateContents() }
+            .sink { [weak self] in
+                guard let self else { return }
+                self.applyStatusIndicator()
+                if self.menuIsOpen { self.updateContents() }
+            }
         updateContents()
     }
 
@@ -78,6 +88,7 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         action(StatusPanelAction.readiness.title, symbol: "shield.lefthalf.filled", selector: #selector(showReadiness))
         menu.addItem(.separator())
         action("Настройки…", symbol: "gearshape", selector: #selector(showSettings), key: ",")
+        action("Сетевой шлюз…", symbol: "network", selector: #selector(showNetwork))
         action("Выйти из Russian Armor", symbol: "power", selector: #selector(quit), key: "q")
     }
 
@@ -87,14 +98,16 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         updateContents()
     }
 
+    func menuWillOpen(_ menu: NSMenu) { menuIsOpen = true; updateContents() }
+    func menuDidClose(_ menu: NSMenu) { menuIsOpen = false }
+
     /// Update existing native menu items, preserving tracking and keyboard selection.
     func updateContents() {
+        let indicator = self.indicator
         menu.items.first?.title = model.protection.title
         menu.items.first?.image = symbol(model.protection.symbol, size: 12)
         menu.items.first?.toolTip = model.protection.detail
-        statusItem?.button?.image = symbol(model.protection.symbol, size: Self.statusBarSymbolSize)
-        statusItem?.button?.setAccessibilityLabel("Russian Armor — \(model.protection.title.lowercased())")
-        statusItem?.button?.toolTip = "Russian Armor — \(model.protection.title.lowercased()). Нажмите, чтобы открыть панель."
+        applyStatusIndicator(indicator)
         var country = "Не проверена"
         var ip = "Не проверен"
         noteItem.toolTip = "Проверка внешнего выхода не доказывает защиту трафика Claude, браузера или всех соединений Mac. Для VPN на роутере локальный туннель не требуется."
@@ -121,7 +134,7 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
                 ? "\(model.usesIndependentConfirmation ? "2 сервиса" : value.provider.title) · автообновление IP"
                 : "\(value.provider.title) · только запрос проверки"
             if let comparison = model.countryComparison, !comparison.agrees {
-                noteItem.toolTip = "Геобазы расходятся: \(comparison.detail). \(model.preferences.accessConfiguration == nil ? "Для старого правила страны используется ipwho.is." : "Гибкие правила проверяют обе страны; любой явный запрет важнее разрешения.")"
+                noteItem.toolTip = "Геобазы расходятся: \(comparison.detail). Для разрешения используется ipwho.is; любой явный запрет второго ответа важнее разрешения."
             }
         case .failed(let message):
             country = "Ошибка проверки"
@@ -141,13 +154,13 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         fields["Страна"]?.title = "Страна: \(country)"
         fields["VPN"]?.title = "VPN: \(model.preferences.vpnLocation.title)"
         fields["VPN"]?.toolTip = vpnExplanation
-        fields["IP"]?.title = "IP: \(ip)"
+        fields["IP"]?.title = "IP: \(model.networkEngine.hideIP ? EnginePrivacy.display(ip) : ip)"
         fields["IPv6"]?.title = "IPv6: утечки не проверены"
         fields["Claude"]?.title = "Claude: \(model.diagnostics.claudeDesktop.title.lowercased())"
         fields["Claude"]?.toolTip = "Защита охватывает Claude Desktop, распознанный Claude Code и их дочерние процессы текущего пользователя."
         fields["Защита"]?.title = model.protection == .notConfigured
             ? "Защита: трафик не блокируется" : "Защита: \(model.protection.title.lowercased())"
-        fields["Защита"]?.toolTip = model.protection.detail
+        fields["Защита"]?.toolTip = "\(indicator.detail) \(ProtectionIndicator.legend)"
         fields["Соединения"]?.title = "Соединения: \(model.traffic.state.title)"
         fields["Соединения"]?.toolTip = "Только сокеты текущего пользователя. Не полный журнал пакетов и не проверка VPN-маршрута."
         eventsHeadingItem.title = model.recentEventsTitle
@@ -169,6 +182,36 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
         checkIPItem.isEnabled = !model.externalCheck.isChecking && !model.isSleeping
         checkIPItem.title = model.externalCheck.isChecking ? "Проверяем IP и страну…"
             : (model.automaticChecksEnabled ? "Обновить IP и страну" : "Проверить IP и страну…")
+    }
+
+    private func applyStatusIndicator(_ indicator: ProtectionIndicator? = nil) {
+        guard let button = statusItem?.button else { return }
+        let current = indicator ?? self.indicator
+        let name = model.protection.symbol
+        guard current != displayedIndicator || name != displayedSymbol else { return }
+        displayedIndicator = current
+        displayedSymbol = name
+        button.image = symbol(name, size: Self.statusBarSymbolSize)
+        button.imagePosition = .imageLeading
+        button.attributedTitle = NSAttributedString(
+            string: "●",
+            attributes: [
+                .foregroundColor: color(for: current.state),
+                .font: NSFont.systemFont(ofSize: 9, weight: .bold),
+                .baselineOffset: 1
+            ]
+        )
+        button.setAccessibilityLabel("Russian Armor — \(current.title.lowercased()). \(current.detail)")
+        button.toolTip = "Russian Armor — \(current.title.lowercased()). \(current.detail) \(ProtectionIndicator.legend) Нажмите, чтобы открыть панель."
+    }
+
+    private func color(for state: ProtectionIndicator.State) -> NSColor {
+        switch state {
+        case .green: return .systemGreen
+        case .yellow: return .systemYellow
+        case .red: return .systemRed
+        case .gray: return .systemGray
+        }
     }
 
     private var vpnExplanation: String {
@@ -266,6 +309,7 @@ final class NativeStatusMenu: NSObject, NSMenuDelegate {
     @objc private func showTraffic() { openWindow(.traffic) }
     @objc private func showReadiness() { openWindow(.readiness) }
     @objc private func showSettings() { openWindow(.settings) }
+    @objc private func showNetwork() { model.requestedSettingsSection = .network; openWindow(.settings) }
     @objc private func quit() { NSApp.terminate(nil) }
 
     @objc private func confirmExternalCheck() {

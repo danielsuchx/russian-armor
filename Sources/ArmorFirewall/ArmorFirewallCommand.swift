@@ -33,6 +33,39 @@ struct ArmorFirewallCommand {
                 guard arguments.count == 2 else { throw FirewallError.invalidConfiguration }
                 try FirewallInstallation().install(configurationPath: arguments[1], executablePath: Bundle.main.executablePath ?? CommandLine.arguments[0])
                 print("Installed and started DISABLED. No firewall rules changed.")
+            case "install-vpn":
+                guard arguments.count == 3 else { throw FirewallError.invalidConfiguration }
+                try FirewallInstallation().install(configurationPath: arguments[1], executablePath: Bundle.main.executablePath ?? CommandLine.arguments[0], vpnCorePath: arguments[2])
+                print("Installed owned VPN service DISABLED.")
+            case "replace-vpn":
+                guard arguments.count == 3 else { throw FirewallError.invalidConfiguration }
+                try FirewallInstallation().replaceVPN(configurationPath: arguments[1], executablePath: Bundle.main.executablePath ?? CommandLine.arguments[0], vpnCorePath: arguments[2])
+                print("Replaced owned VPN service DISABLED.")
+            case "preflight-vpn":
+                try requireInstalled()
+                guard arguments.count == 1 else { throw FirewallError.invalidConfiguration }
+                try RootFiles.locked {
+                    guard try FirewallInstallation().generation() == nil else { throw FirewallError.unsafeFile }
+                    let configuration = try FirewallInstallation().configuration()
+                    let session = OwnedVPNSession(configuration)
+                    do {
+                        try session.start(probeOnly: true)
+                        guard let tunnel = session.tunnel else { throw FirewallError.commandFailed("VPN preflight") }
+                        for (host, path, provider) in [("ipwho.is", "/", EgressProvider.ipWhoIS), ("ipinfo.io", "/json", .ipInfo)] {
+                            let address = configuration.probeAddresses[host]!
+                            let body = try systemCommand("/usr/bin/curl", ["--fail", "--silent", "--show-error", "--max-time", "4", "--noproxy", "*", "--interface", tunnel.interface,
+                                "--resolve", "\(host):443:\(address)", "https://\(host)\(path)"])
+                            let observation = try EgressObservation.decode(Data(body.utf8), provider: provider)
+                            guard observation.ip == configuration.ownedVPN?.expectedExitIP,
+                                  configuration.rules.evaluate(ip: observation.ip, countries: [observation.countryCode]).allowed else { throw FirewallError.commandFailed("VPN exit mismatch") }
+                        }
+                        try OwnedVPNSession.restore()
+                        print("VPN preflight passed; exit matches the pinned VPS. Normal routes restored. PF was not enabled.")
+                    } catch {
+                        try OwnedVPNSession.restore()
+                        throw error
+                    }
+                }
             case "start":
                 try requireInstalled()
                 guard arguments.count == 1 else { throw FirewallError.invalidConfiguration }
@@ -69,7 +102,7 @@ struct ArmorFirewallCommand {
                 _ = try systemCommand("/bin/launchctl", ["bootout", "system/" + FirewallPaths.label])
                 try RootFiles.locked {
                     for file in [FirewallPaths.configuration, FirewallPaths.status,
-                                 FirewallPaths.directory + "/live.pf", FirewallPaths.plist, FirewallPaths.binary] {
+                                 FirewallPaths.directory + "/live.pf", FirewallPaths.plist, FirewallPaths.binary, FirewallPaths.vpnCore] {
                         if RootFiles.exists(file) { _ = try RootFiles.read(file, limit: 64 * 1024 * 1024); guard unlink(file) == 0 else { throw FirewallError.unsafeFile } }
                     }
                 }
@@ -96,6 +129,7 @@ struct ArmorFirewallCommand {
           validate CONFIG.json      Validate without root or network requests
           render CONFIG.json        Print blocked anchor; does not invoke pfctl
           install CONFIG.json       Explicit sudo install; starts DISABLED
+          replace-vpn CONFIG.json    Replace installed owned-VPN helper while disabled
         Installed helper only, explicit sudo:
           start                     Retry launchd bootstrap after a failed install
           enable --acknowledge-whole-mac-outage

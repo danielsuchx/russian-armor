@@ -2,6 +2,7 @@ import ArmorCore
 import ArmorTunnel
 import Darwin
 import Foundation
+import CryptoKit
 
 struct PFEnableReference: Codable {
     let bootSeconds: Int
@@ -51,23 +52,32 @@ struct FirewallInstallation {
         return value
     }
     func writeStatus(_ state: FirewallStatus.State, _ detail: String, interface: String? = nil) throws {
-        try RootFiles.write(JSONEncoder().encode(FirewallStatus(state: state, detail: detail, interface: interface)),
+        let policy = (try? configuration().ownedVPN) != nil ? "owned-vpn" : "external-vpn"
+        try RootFiles.write(JSONEncoder().encode(FirewallStatus(state: state, detail: detail, interface: interface, policy: policy)),
                             to: FirewallPaths.status, mode: 0o644)
     }
 
     /// Install while disabled. Never run a build system as root.
-    func install(configurationPath: String, executablePath: String) throws {
+    func install(configurationPath: String, executablePath: String, vpnCorePath: String? = nil) throws {
         try RootFiles.requireRoot()
         let data = try RootFiles.read(configurationPath, rootOwned: false)
         let configuration = try JSONDecoder().decode(FirewallConfiguration.self, from: data)
         guard configuration.isValid else { throw FirewallError.invalidConfiguration }
         let executable = try RootFiles.read(executablePath, rootOwned: false, limit: 64 * 1024 * 1024)
+        var vpnCore: Data?
+        if let owned = configuration.ownedVPN {
+            guard let vpnCorePath else { throw FirewallError.invalidConfiguration }
+            let data = try RootFiles.read(vpnCorePath, rootOwned: false, limit: 64 * 1024 * 1024)
+            guard OwnedVPNSession.digest(data) == owned.coreSHA256 else { throw FirewallError.unsafeFile }
+            vpnCore = data
+        }
         try RootFiles.checkDirectory(FirewallPaths.directory, create: true)
         try RootFiles.checkDirectory("/Library/PrivilegedHelperTools", create: true)
         try RootFiles.checkDirectory("/Library/LaunchDaemons")
         try RootFiles.locked {
             guard try generation() == nil, !RootFiles.exists(FirewallPaths.plist) else { throw FirewallError.unsafeFile }
             try RootFiles.write(executable, to: FirewallPaths.binary, mode: 0o755)
+            if let vpnCore { try RootFiles.write(vpnCore, to: FirewallPaths.vpnCore, mode: 0o755) }
             try RootFiles.write(JSONEncoder().encode(configuration), to: FirewallPaths.configuration)
             let plist: [String: Any] = [
                 "Label": FirewallPaths.label,
@@ -81,6 +91,31 @@ struct FirewallInstallation {
             try writeStatus(.disabled, "Служба установлена. Сетевой kill switch выключен.")
         }
         _ = try pf.command("/bin/launchctl", ["bootstrap", "system", FirewallPaths.plist])
+    }
+
+    /// Replace the installed root helper while the kill switch is explicitly
+    /// disabled. The daemon is restarted so it cannot keep executing the old
+    /// in-memory helper after the files are replaced.
+    func replaceVPN(configurationPath: String, executablePath: String, vpnCorePath: String) throws {
+        try RootFiles.requireRoot()
+        let data = try RootFiles.read(configurationPath, rootOwned: false)
+        let configuration = try JSONDecoder().decode(FirewallConfiguration.self, from: data)
+        guard configuration.isValid, configuration.ownedVPN != nil else { throw FirewallError.invalidConfiguration }
+        let executable = try RootFiles.read(executablePath, rootOwned: false, limit: 64 * 1024 * 1024)
+        let core = try RootFiles.read(vpnCorePath, rootOwned: false, limit: 64 * 1024 * 1024)
+        guard OwnedVPNSession.digest(core) == configuration.ownedVPN?.coreSHA256 else { throw FirewallError.unsafeFile }
+
+        try RootFiles.locked {
+            guard try generation() == nil,
+                  RootFiles.exists(FirewallPaths.plist),
+                  RootFiles.exists(FirewallPaths.binary),
+                  RootFiles.exists(FirewallPaths.vpnCore) else { throw FirewallError.unsafeFile }
+            try RootFiles.write(executable, to: FirewallPaths.binary, mode: 0o755)
+            try RootFiles.write(core, to: FirewallPaths.vpnCore, mode: 0o755)
+            try RootFiles.write(data, to: FirewallPaths.configuration)
+            try writeStatus(.disabled, "VPN-служба обновлена. Строгий kill switch выключен.")
+        }
+        _ = try systemCommand("/bin/launchctl", ["kickstart", "-k", "system/" + FirewallPaths.label])
     }
 
     func enable() throws {
@@ -145,6 +180,8 @@ struct FirewallInstallation {
             guard live.isEmpty || live == ["anchor \"com.apple/*\" all"] || live == ["anchor \"app.russian-armor\" quick all", "anchor \"com.apple/*\" all"] else {
                 throw FirewallError.incompatiblePF
             }
+            // Restore DNS/routes while the packet guard is still closed.
+            try OwnedVPNSession.restore()
             try RootFiles.write(Data(original.utf8), to: FirewallPaths.main, mode: 0o644)
             try pf.validate(FirewallPaths.main)
             try pf.loadMain()
@@ -193,6 +230,10 @@ final class FirewallDaemon {
     }
 
     func run() async {
+        if (try? installation.configuration().ownedVPN) != nil {
+            await OwnedVPNDaemon().run()
+            return
+        }
         while !Task.isCancelled {
             do { try await tick() }
             catch {
@@ -248,9 +289,13 @@ final class FirewallDaemon {
             probe = nil
             switch result {
             case .success(let result) where result.tunnel == tunnel:
-                let countries: Set<String> = [result.first.countryCode, result.second.countryCode]
+                let countries: Set<String> = [result.first.countryCode]
                 recovery.observe(tunnel: model(result.tunnel), ip: result.first.ip, countries: countries,
-                                 allowed: configuration.rules.evaluate(ip: result.first.ip, countries: countries).allowed, now: now)
+                                 allowed: configuration.rules.evaluateIndependent(
+                                    ip: result.first.ip,
+                                    authoritativeCountry: result.first.countryCode,
+                                    secondaryCountry: result.second.countryCode
+                                 ).allowed, now: now)
             default: recovery.reset()
             }
             nextProbe = now + (tunnel.map { recovery.permits(model($0), now: now) } == true ? 10 : 2)

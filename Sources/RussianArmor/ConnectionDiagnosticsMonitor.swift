@@ -111,6 +111,7 @@ enum DNSConfigurationReader {
 
 @MainActor
 final class ConnectionDiagnosticsMonitor: ObservableObject {
+    static let maximumAge: TimeInterval = 30
     enum State: Equatable {
         case notChecked, checking, sleeping
         case observed(ConnectionDiagnosticsSnapshot)
@@ -164,7 +165,7 @@ final class ConnectionDiagnosticsMonitor: ObservableObject {
             return
         }
         if case .observed(let snapshot) = state,
-           date < snapshot.checkedAt || date.timeIntervalSince(snapshot.checkedAt) >= 30 {
+           date < snapshot.checkedAt || date.timeIntervalSince(snapshot.checkedAt) >= Self.maximumAge {
             state = .stale
             nextCheck = .distantPast
         }

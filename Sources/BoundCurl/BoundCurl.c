@@ -44,7 +44,7 @@ static int progress(void *context, curl_off_t total, curl_off_t received, curl_o
     return ((struct Request *)context)->cancelled();
 }
 
-RAResult ra_tunnel_get(const char *url, const char *interface_name,
+RAResult ra_tunnel_get_resolved(const char *url, const char *interface_name, const char *resolution,
                        unsigned char *body, size_t capacity, size_t *length,
                        long *status, long *retry_after, RACancelled cancelled) {
     struct Request r = {.index = if_nametoindex(interface_name), .body = body,
@@ -55,8 +55,14 @@ RAResult ra_tunnel_get(const char *url, const char *interface_name,
     CURL *curl = curl_easy_init();
     if (!curl) return RA_NETWORK;
     CURLcode code;
+    struct curl_slist *addresses = NULL;
 #define SET(option, value) do { code = curl_easy_setopt(curl, option, value); if (code != CURLE_OK) goto done; } while (0)
     SET(CURLOPT_URL, url);
+    if (resolution && *resolution) {
+        addresses = curl_slist_append(NULL, resolution);
+        if (!addresses) { code = CURLE_OUT_OF_MEMORY; goto done; }
+        SET(CURLOPT_RESOLVE, addresses);
+    }
     SET(CURLOPT_PROTOCOLS, (long)CURLPROTO_HTTPS);
     SET(CURLOPT_PROXY, "");
     SET(CURLOPT_IPRESOLVE, (long)CURL_IPRESOLVE_V4);
@@ -79,6 +85,7 @@ RAResult ra_tunnel_get(const char *url, const char *interface_name,
     *length = r.length;
 done:
     curl_easy_cleanup(curl);
+    curl_slist_free_all(addresses);
     if (r.bind_failed) return RA_BIND;
     if (r.overflow) return RA_TOO_LARGE;
     switch (code) {
@@ -90,4 +97,10 @@ done:
         case CURLE_ABORTED_BY_CALLBACK: return RA_CANCELLED;
         default: return RA_NETWORK;
     }
+}
+
+RAResult ra_tunnel_get(const char *url, const char *interface_name,
+                       unsigned char *body, size_t capacity, size_t *length,
+                       long *status, long *retry_after, RACancelled cancelled) {
+    return ra_tunnel_get_resolved(url, interface_name, NULL, body, capacity, length, status, retry_after, cancelled);
 }

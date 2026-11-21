@@ -2,16 +2,15 @@ import ArmorCore
 import SwiftUI
 
 enum SettingsLayout {
-    static let defaultSize = NSSize(width: 820, height: 680)
-    static let minimumSize = NSSize(width: 760, height: 600)
-    static let sidebarWidth: CGFloat = 184
+    static let defaultSize = NSSize(width: 820, height: 720)
+    static let minimumSize = NSSize(width: 760, height: 620)
+    static let sidebarWidth: CGFloat = 176
 }
 
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var selection: SettingsSection?
     @State private var showsRules = false
-    @State private var showsPrivacy = false
     private let openHistory: () -> Void
 
     init(initialSection: SettingsSection = .protection, openHistory: @escaping () -> Void = {}) {
@@ -29,20 +28,13 @@ struct SettingsView: View {
             sidebar
             Divider()
             VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text(section.title).font(.system(size: 20, weight: .semibold))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(section.title).font(.title.weight(.semibold))
                         .accessibilityAddTraits(.isHeader)
-                    Spacer()
-                    if model.networkEngine.connected, [.network, .routes, .coverage, .backup].contains(section) {
-                        Button { Task { await model.networkEngine.refresh() } } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Обновить данные")
-                        .accessibilityLabel("Обновить данные")
-                    }
+                    Text(section.subtitle).foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 24).padding(.vertical, 18)
+                .padding(24)
+                Divider()
                 // Keep each page mounted so navigation preserves scroll position,
                 // discovered tunnels and an in-flight self-test's result.
                 ZStack(alignment: .topLeading) {
@@ -57,26 +49,9 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
         .frame(minWidth: SettingsLayout.minimumSize.width, minHeight: SettingsLayout.minimumSize.height)
-        .modifier(NetworkPrivacyModifier(engine: model.networkEngine))
         .sheet(isPresented: $showsRules) {
             AccessRulesEditor(configuration: model.accessConfiguration).environmentObject(model)
-                .modifier(NetworkPrivacyModifier(engine: model.networkEngine))
-        }
-        .sheet(isPresented: $showsPrivacy) {
-            SettingsDetailSheet(title: "Хранение данных", height: 340) {
-                SettingsCard(title: "На этом Mac") {
-                    Text("Настройки и до \(EventJournal.capacity) событий процессной защиты хранятся локально. Наблюдаемые ею IP остаются в памяти; адреса в правилах допуска сохраняются.")
-                    Text("Сетевой модуль сохраняет историю выходных IP и ключи прокси в файле с доступом только для пользователя, без шифрования Keychain.")
-                }
-            }
-        }
-        .onChange(of: model.requestedSettingsSection) { destination in
-            if let destination { selection = destination }
-        }
-        .onChange(of: selection) { destination in
-            if model.requestedSettingsSection != destination { model.requestedSettingsSection = destination }
         }
     }
 
@@ -97,14 +72,11 @@ struct SettingsView: View {
                         diagnosticsContent
                     case .general:
                         generalContent
-                    case .network, .routes, .audit, .coverage, .backup, .guides:
-                        NetworkWorkspaceView(engine: model.networkEngine, section: page)
                     }
                 }
-                .font(.system(size: 13))
-                .frame(maxWidth: 660, alignment: .leading)
-                .padding(.horizontal, 24).padding(.bottom, 24)
-                .frame(maxWidth: .infinity, alignment: .top)
+                .font(AppTypography.description)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(24)
             }
         }
     }
@@ -112,15 +84,11 @@ struct SettingsView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             List(selection: $selection) {
-                ForEach(Array(SettingsSection.navigationGroups.enumerated()), id: \.offset) { _, group in
-                    Section(group.0) {
-                        ForEach(group.1) { section in
-                            Label(section.title, systemImage: section.symbol)
-                                .padding(.vertical, 3)
-                                .tag(section)
-                                .accessibilityIdentifier("settings-section-\(section.rawValue)")
-                        }
-                    }
+                ForEach(SettingsSection.allCases) { section in
+                    Label(section.title, systemImage: section.symbol)
+                        .padding(.vertical, 5)
+                        .tag(section)
+                        .accessibilityIdentifier("settings-section-\(section.rawValue)")
                 }
             }
             .listStyle(.sidebar)
@@ -141,7 +109,6 @@ struct SettingsView: View {
     private func protectionContent(chooseRules: @escaping () -> Void) -> some View {
         VStack(alignment: .leading, spacing: 22) {
             protectionStatus(chooseRules: chooseRules)
-            ClaudeProtectionView(filter: model.claudeFilter)
 
             settingsGroup("Подключение") {
                 Picker("Где работает VPN", selection: $model.preferences.vpnLocation) {
@@ -180,14 +147,11 @@ struct SettingsView: View {
             .id("access-rules")
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Приостановка Claude не исключает передачу данных до паузы.")
+                Label("Граница защиты", systemImage: "info.circle").font(.subheadline.weight(.semibold))
+                Text("Контроль приостанавливает процессы Claude, но не блокирует трафик до паузы. Данные могут успеть уйти; отсутствие сетевых утечек не гарантируется.")
             }
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-
-            DisclosureGroup("Дополнительно · VPN для всего Mac") {
-                PacketGuardView(guardStore: model.packetGuard).padding(.top, 10)
-            }
         }
     }
 
@@ -203,17 +167,17 @@ struct SettingsView: View {
     private func protectionStatus(chooseRules: @escaping () -> Void) -> some View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: status.symbol)
-                .font(.system(size: 22))
+                .font(.system(size: 26))
                 .foregroundStyle(statusColor)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(status.title).font(.system(size: 16, weight: .semibold)).foregroundStyle(statusColor)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(status.title).font(.title2.weight(.semibold)).foregroundStyle(statusColor)
                     .accessibilityIdentifier("settings-protection-status")
                 Text(status.detail).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if !model.isSleeping {
                     if model.needsRuleSetup {
-                        Button("Настроить допуск", action: chooseRules).buttonStyle(.borderedProminent)
+                        Button("Настроить допуск", action: chooseRules)
                     } else if !model.protection.isOperational {
                         Button("Проверить подключение") { model.refreshExternalIP() }
                             .disabled(model.externalCheck.isChecking)
@@ -222,23 +186,23 @@ struct SettingsView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(16)
+        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var connectionGuidance: String {
         switch model.preferences.vpnLocation {
-        case .router: return "Проверяем внешний IP. Локальный туннель не требуется."
-        case .thisMac: return "Выберите VPN-приложение ниже."
-        case .unspecified: return "Выберите, где подключён ваш VPN."
+        case .router: return "Вы указали VPN на роутере. Локальный туннель не требуется; выход за роутером напрямую не виден."
+        case .thisMac: return "Вы указали VPN на этом Mac. Выберите владельца локального туннеля ниже."
+        case .unspecified: return "Укажите, где работает VPN. Сам выбор не подтверждает подключение."
         }
     }
 
     private func ruleSummary(_ title: String, rules: AccessRules) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.subheadline.weight(.semibold))
-            Text(SettingsRuleSummary.countries(rules))
+            Text("Разрешённые страны: \(SettingsRuleSummary.countries(rules))")
                 .fixedSize(horizontal: false, vertical: true)
             if let restrictions = SettingsRuleSummary.restrictions(rules) {
                 Text(restrictions).foregroundStyle(.secondary)
@@ -252,9 +216,6 @@ struct SettingsView: View {
         // confirmation during refresh. Raw cached success is not permission.
         let content = StatusPanelContent(model: model)
         return VStack(alignment: .leading, spacing: 22) {
-            DiagnosticSummaryView()
-            DisclosureGroup("Подробности подключения") {
-            VStack(alignment: .leading, spacing: 20) {
             settingsGroup("IP и страна выхода") {
                 Text(content.diagnosticsSummary).font(.headline)
                 valueRow("Страна", value: content.country)
@@ -265,7 +226,7 @@ struct SettingsView: View {
                     valueRow("Источники", value: model.countryComparison?.services ?? "ipwho.is + IPinfo / GeoJS")
                     valueRow("Подтверждение", value: model.recoveryProgress)
                     DisclosureGroup("Как принимается решение") {
-                        Text("Восстановление после трёх успешных проверок с интервалом не менее двух секунд. Затем проверка каждые 5 секунд; допуск действует не более 15 секунд от начала проверки. Каждый сервис самостоятельно определяет внешний IP своего запроса; адреса должны совпасть. При лимите или недоступности IPinfo используется GeoJS, с соблюдением паузы сервиса. Страну для разрешения определяет ipwho.is; явный запрет страны из второго ответа сохраняется. Проверяется выход Russian Armor, а не каждого соединения Claude.")
+                        Text("Восстановление после трёх успешных проверок с интервалом не менее двух секунд. Затем проверка каждые 5 секунд; допуск действует не более 15 секунд от начала проверки. Каждый сервис самостоятельно определяет внешний IP своего запроса; адреса должны совпасть. При лимите или недоступности IPinfo используется GeoJS, с соблюдением паузы сервиса. В режиме одной страны источник правила — ipwho.is; в правилах профиля учитываются оба ответа. Проверяется выход Russian Armor, а не каждого соединения Claude.")
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, 6)
@@ -289,11 +250,8 @@ struct SettingsView: View {
                                       expectedIP: model.confirmedEgressObservation?.ip)
             ClaudeRoutesView(monitor: model.claudeRoutes, vpnLocation: model.preferences.vpnLocation)
             ProtectionSelfTestView()
-            }
-            .padding(.top, 12)
-            }
             settingsGroup("История событий") {
-                Text("Последние \(EventJournal.capacity) событий на этом Mac, без адресов соединений.")
+                Text("До \(EventJournal.capacity) последних событий на этом Mac. Наблюдаемые IP и адреса соединений не записываются в историю.")
                     .foregroundStyle(.secondary)
                 Button("Открыть историю…", action: openHistory)
                     .accessibilityIdentifier("settings-open-history")
@@ -304,14 +262,18 @@ struct SettingsView: View {
     private var generalContent: some View {
         VStack(alignment: .leading, spacing: 22) {
             settingsGroup("Запуск") {
-                settingsSwitch("Запускать при входе на Mac", isOn: $model.preferences.startAtLogin)
+                settingsSwitch("Запускать Russian Armor при входе на Mac", isOn: $model.preferences.startAtLogin)
             }
-            settingsGroup("Конфиденциальность") {
-                settingsSwitch("Скрывать IP в интерфейсе", isOn: Binding(get: { model.networkEngine.hideIP }, set: { model.networkEngine.setHideIP($0) }))
+            settingsGroup("События и данные") {
                 settingsSwitch("Записывать изменения сети и туннелей", isOn: $model.preferences.recordNetworkEvents)
                 Divider()
-                SettingsDetailLink(title: "Хранение данных", detail: "Локальные настройки, история и ключи прокси") { showsPrivacy = true }
-
+                Label {
+                    Text("Настройки и последние \(EventJournal.capacity) событий хранятся только на этом Mac. Наблюдаемые IP и адреса соединений остаются в памяти и не записываются в историю. IP и диапазоны, введённые в правила допуска, сохраняются локально как настройки.")
+                } icon: {
+                    Image(systemName: "internaldrive")
+                }
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
             settingsGroup("Обновления") {
                 UpdateControls(updater: model.updater)
@@ -328,8 +290,14 @@ struct SettingsView: View {
         }
     }
 
-    private func settingsGroup<Content: View>(_ title: String, @ViewBuilder content: @escaping () -> Content) -> some View {
-        SettingsCard(title: title, content: content)
+    private func settingsGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12, content: content)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+        } label: {
+            Text(title).font(.headline).accessibilityAddTraits(.isHeader)
+        }
     }
 
     private func valueRow(_ title: String, value: String) -> some View {
@@ -342,6 +310,9 @@ struct SettingsView: View {
     }
 
     private func settingsSwitch(_ title: String, isOn: Binding<Bool>) -> some View {
-        SettingsToggle(title: title, isOn: isOn)
+        Toggle(isOn: isOn) {
+            Text(title).fixedSize(horizontal: false, vertical: true)
+        }
+        .toggleStyle(.switch)
     }
 }

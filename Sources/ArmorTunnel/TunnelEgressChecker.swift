@@ -74,7 +74,7 @@ enum BoundTunnelProbe {
 
 /// Small, bounded HTTP/1.1-over-TLS client. No redirects, cookies, proxy discovery,
 /// credentials, TLS overrides or fallback to an unrestricted URLSession.
-public final class TunnelHTTP: @unchecked Sendable {
+final class TunnelHTTP: @unchecked Sendable {
     private let queue = DispatchQueue(label: "app.russian-armor.tunnel-http")
     private var monitor: NWPathMonitor?
     private var connection: NWConnection?
@@ -82,7 +82,7 @@ public final class TunnelHTTP: @unchecked Sendable {
     private var buffer = Data()
     private var finished = false
 
-    public static func get(host: String, path: String, interface: String, address: String? = nil) async throws -> Data {
+    static func get(host: String, path: String, interface: String, address: String? = nil) async throws -> Data {
         let request = TunnelHTTP()
         return try await withTaskCancellationHandler(operation: {
             try Task.checkCancellation()

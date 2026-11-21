@@ -23,7 +23,7 @@ private final class StatusPanelWindow: NSPanel {
     override func cancelOperation(_ sender: Any?) { onEscape?() }
 }
 
-private final class StatusPanelHostingView: NSHostingView<AnyView> {
+private final class StatusPanelHostingView: NSHostingView<StatusPanelView> {
     var onLayout: ((CGFloat) -> Void)?
     private var isReportingLayout = false
 
@@ -48,16 +48,11 @@ final class StatusPanelController: NSObject {
     private let scrollView = NSScrollView()
     private var placement: (anchor: NSRect, visibleFrame: NSRect)?
     private var modelSubscription: AnyCancellable?
-    private let makeContent: () -> StatusPanelView
-    private var layoutQueued = false
 
     init(model: AppModel, perform: @escaping (StatusPanelAction) -> Void) {
         let presentation = StatusPanelPresentation()
         self.presentation = presentation
-        makeContent = { StatusPanelView(model: model, presentation: presentation, perform: perform) }
-        // An ordered-out NSHostingView still observes its model and lays out.
-        // Mount the live view only while the panel is open.
-        hostingView = StatusPanelHostingView(rootView: AnyView(EmptyView()))
+        hostingView = StatusPanelHostingView(rootView: StatusPanelView(model: model, presentation: presentation, perform: perform))
         let panel = StatusPanelWindow(
             contentRect: NSRect(x: 0, y: 0, width: StatusPanelLayout.width, height: 1),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false
@@ -98,12 +93,8 @@ final class StatusPanelController: NSObject {
         modelSubscription = model.objectWillChange.merge(with: presentation.objectWillChange).sink { [weak self] _ in
             // NSScrollView can preserve the document frame after its SwiftUI
             // content shrinks. Re-measure after the published change commits.
-            guard let self, self.window.isVisible, !self.layoutQueued else { return }
-            self.layoutQueued = true
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.layoutQueued = false
-                guard self.window.isVisible else { return }
                 self.hostingView.invalidateIntrinsicContentSize()
                 self.hostingView.needsLayout = true
                 self.hostingView.layoutSubtreeIfNeeded()
@@ -197,7 +188,6 @@ final class StatusPanelController: NSObject {
     func show(anchor: NSRect, visibleFrame: NSRect) {
         removeMonitors()
         placement = (anchor, visibleFrame)
-        hostingView.rootView = AnyView(makeContent())
         resizeToFit(height: hostingView.fittingSize.height)
         window.makeKeyAndOrderFront(nil)
         // Menu-bar tracking can briefly take key focus from a nonactivating panel.
@@ -237,7 +227,6 @@ final class StatusPanelController: NSObject {
 
     func close() {
         window.orderOut(nil)
-        hostingView.rootView = AnyView(EmptyView())
         removeMonitors()
     }
 

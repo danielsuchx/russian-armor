@@ -263,32 +263,6 @@ final class StatusPanelTests: XCTestCase {
         XCTAssertFalse(controller.panel.window.isVisible)
     }
 
-    func testClosingSettingsReleasesItsLiveViewsAndReopensAtTheSameFrame() async throws {
-        try XCTSkipUnless(ProcessInfo.processInfo.environment["RUSSIAN_ARMOR_RENDER_PANEL_TESTS"] == "1",
-                         "Opt-in GUI window lifecycle check")
-        _ = NSApplication.shared
-        let model = try model()
-        model.requestedSettingsSection = .network
-        let windows = ArmorWindows(model: model)
-        let first = windows.open(.settings)
-        let window = try XCTUnwrap(first.window)
-        weak var host = window.contentViewController
-        XCTAssertNotNil(host)
-        window.setFrameOrigin(NSPoint(x: 120, y: 140))
-        let frame = window.frame
-        window.close()
-        try await Task.sleep(nanoseconds: 50_000_000)
-        XCTAssertNil(window.contentViewController, "Closed settings must stop observing and laying out all pages")
-        XCTAssertNil(host)
-        let reopened = windows.open(.settings)
-        defer { reopened.close() }
-        XCTAssertFalse(first === reopened)
-        XCTAssertNotNil(reopened.window?.contentViewController)
-        XCTAssertEqual(reopened.window?.frame, frame)
-        XCTAssertEqual(model.requestedSettingsSection, .network)
-        XCTAssertEqual(model.protection, .notConfigured, "Releasing UI must not alter the protection model")
-    }
-
     func testTransientFocusLossDuringLaunchKeepsPanelOpenUntilDismissed() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["RUSSIAN_ARMOR_RENDER_PANEL_TESTS"] == "1",
                          "Opt-in GUI focus lifecycle check")
@@ -356,15 +330,6 @@ final class StatusPanelTests: XCTestCase {
             XCTAssertEqual(panel.window.frame.height, collapsed.height, accuracy: 1)
             XCTAssertEqual(panel.window.frame.maxY, collapsed.maxY, accuracy: 0.5)
         }
-        panel.presentation.showsDiagnostics = true
-        panel.close()
-        try await Task.sleep(nanoseconds: 50_000_000)
-        XCTAssertFalse(panel.window.isVisible)
-        XCTAssertTrue(panel.presentation.showsDiagnostics, "Dismissing the live view must preserve disclosure choices")
-        panel.show(anchor: NSRect(x: screen.midX, y: screen.maxY, width: 24, height: 24), visibleFrame: screen)
-        try await Task.sleep(nanoseconds: 100_000_000)
-        XCTAssertGreaterThan(panel.window.frame.height, collapsed.height + 90,
-                             "Reopening must mount the current expanded content")
     }
 
     func testDisclosureResizesWindowBeforeTheHostingLayoutReturns() async throws {

@@ -14,9 +14,6 @@ enum FirewallPaths {
     static let main = "/private/etc/pf.conf"
     static let anchor = "/private/etc/pf.anchors/app.russian-armor"
     static let label = "app.russian-armor.firewall"
-    static let vpnCore = "/Library/PrivilegedHelperTools/app.russian-armor.wireguard"
-    static let vpnRuntime = directory + "/owned-vpn-runtime.json"
-    static let vpnInterface = directory + "/owned-vpn-interface"
 }
 
 /// Never follows a writable-directory symlink when reading or replacing root state.

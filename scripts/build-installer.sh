@@ -43,13 +43,4 @@ EOF
 /usr/bin/hdiutil verify "$STAGING_DIRECTORY/Russian-Armor.dmg"
 mv -f "$STAGING_DIRECTORY/Russian-Armor.dmg" "$IMAGE"
 (cd "$ROOT/dist" && /usr/bin/shasum -a 256 Russian-Armor.dmg > SHA256SUMS.txt)
-ARMOR_SIGNER_PYTHON="${ARMOR_SIGNER_PYTHON:-python3}"
-if ! "$ARMOR_SIGNER_PYTHON" -c 'import cryptography' 2>/dev/null; then
-    ARMOR_SIGNER_PYTHON=/opt/homebrew/bin/python3
-fi
-if [[ -f "${ARMOR_SIGNING_KEY_FILE:-$ROOT/.release-signing/private.pem}" ]]; then
-    "$ARMOR_SIGNER_PYTHON" "$ROOT/scripts/sign-release.py" --key "${ARMOR_SIGNING_KEY_FILE:-$ROOT/.release-signing/private.pem}"
-else
-    printf 'No release signing key: image is built for manual installation; automatic update requires Russian-Armor.dmg.sig.\n'
-fi
 printf '\nInstaller: %s\nChecksum: %s\n' "$IMAGE" "$ROOT/dist/SHA256SUMS.txt"

@@ -25,11 +25,6 @@ enum ClaudeSafeLaunchError: Error, Equatable, LocalizedError {
 
 @MainActor
 private enum ClaudeDesktopLauncher {
-    /// Chromium/Electron flags apply only to the protected Claude instance.
-    /// `secure` DoH has no plaintext DNS fallback; QUIC and non-proxied WebRTC
-    /// UDP are disabled before the app creates its first network socket.
-    static let protectionArguments = ClaudeBrowserLauncher.protectionArguments
-
     static func launch() async throws {
         guard let url = NSWorkspace.shared.urlForApplication(
             withBundleIdentifier: LocalDiagnosticsReader.claudeBundleIdentifier
@@ -37,8 +32,6 @@ private enum ClaudeDesktopLauncher {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         configuration.addsToRecentItems = true
-        configuration.createsNewApplicationInstance = true
-        configuration.arguments = protectionArguments
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, error in
                 if let error {
@@ -53,10 +46,6 @@ private enum ClaudeDesktopLauncher {
 
 @MainActor
 final class AppModel: ObservableObject {
-    let networkEngine: NetworkEngineStore
-    let packetGuard: PacketGuardStore
-    let claudeFilter: ClaudeNetworkFilterStore
-    @Published var requestedSettingsSection: SettingsSection?
     let updater = ApplicationUpdater()
     let tunnelReaderRegistration = TunnelReaderRegistration()
 
@@ -120,18 +109,13 @@ final class AppModel: ObservableObject {
             return AccessRules().evaluate(ip: nil, countries: [])
         }
         let observation = currentObservation
-        let rules = profile.rules(for: application)
-        let countries = !protectionCountries.isEmpty
-            ? protectionCountries
-            : Set(observation.map { [$0.countryCode] } ?? [])
-        guard let authoritativeCountry = countries.first else {
-            return rules.evaluate(ip: observation?.ip, countries: [])
+        let countries: Set<String>
+        if preferences.accessConfiguration != nil, !protectionCountries.isEmpty {
+            countries = protectionCountries
+        } else {
+            countries = Set(observation.map { [$0.countryCode] } ?? [])
         }
-        return rules.evaluateIndependent(
-            ip: observation?.ip,
-            authoritativeCountry: authoritativeCountry,
-            secondaryCountry: countryComparison?.agrees == false ? countryComparison?.independentCountry : nil
-        )
+        return profile.rules(for: application).evaluate(ip: observation?.ip, countries: countries)
     }
     var automaticChecksEnabled: Bool { preferences.automaticIPChecks || processProtection != nil }
     var usesIndependentConfirmation: Bool { processProtection != nil }
@@ -147,7 +131,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var countryComparison: CountryComparison?
     @Published private(set) var journal: EventJournal
     @Published private(set) var watchdogHealthy = true
-    @Published private(set) var watchdogHasReported = false
     @Published private(set) var claudeLaunchInProgress = false
     @Published private(set) var verifiedTunnel: VerifiedTunnel?
     @Published var preferences: AppPreferences {
@@ -237,13 +220,8 @@ final class AppModel: ObservableObject {
         tunnelEgressReader: ((String?) async throws -> TunnelCheckResult)? = nil,
         happConnectionMonitor: HappConnectionMonitor? = nil,
         connectionDiagnostics: ConnectionDiagnosticsMonitor? = nil,
-        claudeLauncher: @escaping () async throws -> Void = { try await ClaudeDesktopLauncher.launch() },
-        networkEngine: NetworkEngineStore? = nil,
-        packetGuard: PacketGuardStore? = nil
+        claudeLauncher: @escaping () async throws -> Void = { try await ClaudeDesktopLauncher.launch() }
     ) {
-        self.networkEngine = networkEngine ?? NetworkEngineStore(defaults: defaults, automaticallyStart: startsMonitoring)
-        self.packetGuard = packetGuard ?? PacketGuardStore(defaults: defaults, monitoring: startsMonitoring, reader: startsMonitoring ? FirewallStatusReader.read : { nil })
-        self.claudeFilter = ClaudeNetworkFilterStore(defaults: defaults, monitoring: startsMonitoring)
         self.connectionDiagnostics = connectionDiagnostics ?? ConnectionDiagnosticsMonitor(now: now)
         self.runsConnectionDiagnostics = startsMonitoring || connectionDiagnostics != nil
         traffic = TrafficMonitor(reader: trafficReader)
@@ -338,23 +316,6 @@ final class AppModel: ObservableObject {
                 .sink { [weak self] _ in self?.expireExternalCheck() }
                 .store(in: &subscriptions)
         }
-        self.packetGuard.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
-        self.claudeFilter.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
-        self.claudeFilter.$verified.dropFirst().receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.applyProtectionPolicy() }.store(in: &subscriptions)
-        self.claudeFilter.policy = { [weak self] in
-            guard let self else { return .init(desktopAllowed: false, codeAllowed: false, processes: []) }
-            let processes = ProtectedProcessCatalog.current().map { ClaudeNetworkPolicy.Process(identity: $0.identity, application: $0.application) }
-            return .init(desktopAllowed: self.filterAllowsNetwork(.desktop), codeAllowed: self.filterAllowsNetwork(.code), processes: processes)
-        }
-        self.networkEngine.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &subscriptions)
-        self.networkEngine.$connected.dropFirst().receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.applyProtectionPolicy() }
-            .store(in: &subscriptions)
     }
 
     deinit { externalTask?.cancel() }
@@ -460,11 +421,7 @@ final class AppModel: ObservableObject {
                 self.confirmedAt = startedAt
                 self.externalCheckStartedAt = nil
                 self.protectionObservation = policyObservation
-                // The two providers independently confirm the same public IP.
-                // Keep the authoritative ipwho.is country as the policy and
-                // recovery identity; the secondary country remains visible as
-                // a diagnostic and can still trigger an explicit deny rule.
-                self.protectionCountries = [policyObservation.countryCode]
+                self.protectionCountries = comparison?.countries ?? [observation.countryCode]
                 self.externalCheck = .observed(policyObservation)
                 self.recovery.observe(ip: observation.ip, countries: self.protectionCountries, at: startedAt)
                 self.applyProtectionPolicy()
@@ -508,15 +465,6 @@ final class AppModel: ObservableObject {
     }
 
     func expireExternalCheck(now date: Date? = nil) {
-        if !claudeFilter.permitsClaude {
-            processProtection?.pause("Сетевой фильтр Claude не подтвердил работу. Claude остаётся на паузе.")
-        }
-        if !packetGuard.permitsClaude {
-            processProtection?.pause("Строгая сетевая защита не подтверждена. Claude остаётся на паузе.")
-        }
-        if networkEngine.requiresHealthyGateway && !networkEngine.isHealthy {
-            processProtection?.pause("Сетевой шлюз недоступен. Claude остаётся на паузе до восстановления модуля.")
-        }
         refreshConnectionDiagnostics()
         claudeRoutes.expire()
         let instant = date ?? now()
@@ -638,14 +586,6 @@ final class AppModel: ObservableObject {
 
     private func receiveRouteChange() {
         guard !isSleeping else { return }
-        // The root-owned PF/VPN daemon is the authority for whole-Mac strict
-        // mode. Its own route maintenance must not repeatedly revoke Claude's
-        // process lease while the daemon still reports a fresh protected state.
-        if packetGuard.verified {
-            traffic.refresh()
-            refreshDiagnostics()
-            return
-        }
         invalidateExternalCheck("Сетевой маршрут или адрес изменился. Нужна новая проверка IP.")
         traffic.refresh()
         refreshDiagnostics()
@@ -718,8 +658,7 @@ final class AppModel: ObservableObject {
     }
 
     var canLaunchClaudeUnderProtection: Bool {
-        guard !claudeLaunchInProgress, !isSleeping, watchdogHealthy, packetGuard.permitsClaude, claudeFilter.permitsClaude,
-              !networkEngine.requiresHealthyGateway || networkEngine.isHealthy,
+        guard !claudeLaunchInProgress, !isSleeping, watchdogHealthy,
               network.connectivity == .available,
               diagnostics.claudeDesktop == .notRunning,
               desktopPolicyAllowsLaunch,
@@ -764,39 +703,11 @@ final class AppModel: ObservableObject {
     }
 
     private var canLaunchAfterRequest: Bool {
-        !isSleeping && watchdogHealthy && packetGuard.permitsClaude && claudeFilter.permitsClaude
-            && (!networkEngine.requiresHealthyGateway || networkEngine.isHealthy)
+        !isSleeping && watchdogHealthy
             && network.connectivity == .available
             && desktopPolicyAllowsLaunch
             && (!requiresClaudeRoutes || claudeRoutes.pauseReason(vpnLocation: preferences.vpnLocation) == nil)
             && (!startsMonitoring || routeObserver.isMonitoring)
-    }
-
-    var canLaunchClaudeBrowser: Bool { !claudeLaunchInProgress && canLaunchAfterRequest }
-
-    func launchClaudeBrowser() async throws {
-        guard canLaunchClaudeBrowser else { throw ClaudeSafeLaunchError.protectionUnavailable }
-        claudeLaunchInProgress = true
-        defer { claudeLaunchInProgress = false }
-        try await ClaudeBrowserLauncher.launch()
-        guard canLaunchAfterRequest else {
-            processProtection?.pause("Состояние сети изменилось во время запуска браузера Claude.")
-            throw ClaudeSafeLaunchError.protectionChanged
-        }
-        processProtection?.enforce()
-        record("Открыт браузер Claude", detail: "Отдельный профиль с запретом прямого WebRTC/UDP. Обычные профили браузеров не изменялись.")
-    }
-
-    private func filterAllowsNetwork(_ application: ProtectedApplication) -> Bool {
-        guard !isSleeping, watchdogHealthy, packetGuard.permitsClaude,
-              !networkEngine.requiresHealthyGateway || networkEngine.isHealthy,
-              network.connectivity == .available, recovery.isReady, currentObservation != nil,
-              tunnelPauseReason == nil,
-              !requiresClaudeRoutes || claudeRoutes.pauseReason(vpnLocation: preferences.vpnLocation) == nil,
-              !startsMonitoring || routeObserver.isMonitoring else { return false }
-        if case .failed = processProtection?.status { return false }
-        if preferences.accessConfiguration != nil { return accessDecision(for: application).allowed }
-        return currentObservation?.countryCode == preferences.allowedCountryCode
     }
 
     private var desktopPolicyAllowsLaunch: Bool {
@@ -809,16 +720,6 @@ final class AppModel: ObservableObject {
     // Presentation uses the same freshness boundary as enforcement, never a
     // separate cached success that could outlive the actual permission.
     var confirmedEgressObservation: EgressObservation? { currentObservation }
-
-    func diagnosticReport() -> DiagnosticReport {
-        DiagnosticReportBuilder.build(
-            at: now(), appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-            vpnLocation: preferences.vpnLocation, protection: protection, external: externalCheck,
-            confirmedEgress: currentObservation, routes: claudeRoutes.state, diagnostics: connectionDiagnostics.state,
-            servicesEnabled: preferences.serviceDiagnosticsEnabled,
-            watchdogHealthy: watchdogHasReported ? watchdogHealthy : nil, sleeping: isSleeping
-        )
-    }
 
     private var currentObservation: EgressObservation? {
         guard let confirmedAt,
@@ -857,18 +758,6 @@ final class AppModel: ObservableObject {
         }
         guard watchdogHealthy else {
             processProtection.pause("Наблюдатель восстановления недоступен. Claude остаётся на паузе.")
-            return
-        }
-        guard packetGuard.permitsClaude else {
-            processProtection.pause("Строгая сетевая защита не подтверждена. Claude остаётся на паузе.")
-            return
-        }
-        guard claudeFilter.permitsClaude else {
-            processProtection.pause("Сетевой фильтр Claude не подтвердил работу. Ожидаем разрешение macOS или восстановление фильтра.")
-            return
-        }
-        guard !networkEngine.requiresHealthyGateway || networkEngine.isHealthy else {
-            processProtection.pause("Сетевой шлюз недоступен. Claude остаётся на паузе до восстановления модуля.")
             return
         }
         if needsRuleSetup {
@@ -915,7 +804,6 @@ final class AppModel: ObservableObject {
     }
 
     func updateWatchdogHealth(_ healthy: Bool) {
-        if !watchdogHasReported { watchdogHasReported = true }
         guard watchdogHealthy != healthy else { return }
         watchdogHealthy = healthy
         if healthy {

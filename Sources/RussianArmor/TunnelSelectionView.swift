@@ -12,19 +12,22 @@ struct TunnelSelectionView: View {
 
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        GroupBox("Владелец локального туннеля") {
             VStack(alignment: .leading, spacing: 8) {
                 Text(model.verifiedTunnel?.title ?? "Не подтверждён")
-                    .font(.system(size: 13))
+                    .font(AppTypography.description)
                 if let preferred = model.preferences.preferredTunnelOwner {
-                    Text("Выбран: \(preferred)").font(.system(size: 13)).textSelection(.enabled)
+                    Text("Выбран: \(preferred)").font(AppTypography.description).textSelection(.enabled)
                     Button("Сбросить выбор владельца") { model.preferences.preferredTunnelOwner = nil }
                 }
-                Text("Если VPN-приложение не подтверждено, Claude остаётся на паузе.")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
-                DisclosureGroup("Hiddify, Clash и проверка туннеля") {
-                    Text("Проверяется владелец туннеля и подпись процесса. При неоднозначности — пауза без перехода на Wi-Fi. Подпись не подтверждает надёжность поставщика VPN.")
-                        .font(.caption).foregroundStyle(.secondary)
+                Text("Проверочные запросы привязаны к выбранному туннелю. Если подтвердить его нельзя, Claude остаётся на паузе.")
+                    .font(AppTypography.description).foregroundStyle(.secondary)
+                DisclosureGroup("Как проверяется туннель") {
+                    Text("Проверяем сокет utun и подпись процесса. Проверочные запросы требуют этот интерфейс, используют IPv4 и TLS. При неоднозначности или недоступном владельце — пауза, без перехода на Wi-Fi. Подпись подтверждает идентичность, не надёжность поставщика VPN.")
+                        .font(AppTypography.description).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                DisclosureGroup("Hiddify и Clash Verge Rev · VPN/TUN") {
                     TunnelReaderControls(registration: model.tunnelReaderRegistration) {
                         tunnels = []
                         model.refreshExternalIP()
@@ -50,7 +53,7 @@ struct TunnelSelectionView: View {
                         model.refreshExternalIP()
                     }
                     .disabled(model.isSleeping || (selected && model.externalCheck.isChecking))
-                    .font(.system(size: 13))
+                    .font(AppTypography.description)
                 }
                 if model.preferences.preferredTunnelOwner != nil {
                     switch model.externalCheck {
@@ -65,8 +68,8 @@ struct TunnelSelectionView: View {
                             .foregroundStyle(.orange).textSelection(.enabled)
                     }
                 }
-                if let message { Text(message).font(.system(size: 13)).foregroundStyle(.orange) }
-            }.frame(maxWidth: .infinity, alignment: .leading)
+                if let message { Text(message).font(AppTypography.description).foregroundStyle(.orange) }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
         }
         .onReceive(model.$externalCheck) { check in
             switch check {
@@ -98,7 +101,7 @@ private struct TunnelReaderControls: View {
             if let message = registration.message { Text(message).foregroundStyle(.orange) }
         }
         .disabled(registration.busy)
-        .font(.system(size: 13))
+        .font(AppTypography.description)
         .onAppear { registration.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             registration.refresh()

@@ -56,7 +56,7 @@ final class EgressFallbackTests: XCTestCase {
         XCTAssertFalse(detail.contains("IPinfo"))
     }
 
-    func testStrictRulesUseAuthoritativeCountryWhenBackupGeoIPDiffers() async throws {
+    func testStrictRulesStillRejectBackupCountry() async throws {
         let controller = ProcessProtectionController(automaticallyMonitor: false, processReader: { [] })
         let model = AppModel(defaults: try defaults(strictRules: true), startsMonitoring: false,
                              diagnosticsReader: { .notChecked }, egressReader: { provider in
@@ -66,9 +66,9 @@ final class EgressFallbackTests: XCTestCase {
         defer { model.shutdownProtection() }
         model.refreshExternalIP()
         await settle(model)
-        XCTAssertTrue(model.protection.isOperational)
-        XCTAssertTrue(model.accessDecision(for: .desktop).allowed)
-        XCTAssertTrue(model.accessDecision(for: .code).allowed)
+        XCTAssertFalse(model.protection.isOperational)
+        XCTAssertFalse(model.accessDecision(for: .desktop).allowed)
+        XCTAssertFalse(model.accessDecision(for: .code).allowed)
         XCTAssertEqual(model.countryComparison?.independentCountry, "RU")
     }
 

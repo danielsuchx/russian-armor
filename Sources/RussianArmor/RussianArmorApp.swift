@@ -44,8 +44,6 @@ private final class ArmorApplicationDelegate: NSObject, NSApplicationDelegate {
     private var statusMenu: NativeStatusMenu?
     private var windows: ArmorWindows?
     private var model: AppModel?
-    private var networkAlerts: NetworkInterceptionController?
-    private var pendingImportURLs: [URL] = []
     private let watchdog: ApplicationWatchdog?
     private var watchdogTimer: Timer?
     private var terminationInProgress = false
@@ -58,14 +56,9 @@ private final class ArmorApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let model = AppModel()
         self.model = model
-        model.updater.startAutomaticChecks()
         Task { await model.tunnelReaderRegistration.migrateEnabledReader() }
         let windows = ArmorWindows(model: model)
         self.windows = windows
-        networkAlerts = NetworkInterceptionController(engine: model.networkEngine) { [weak windows, weak model] in
-            model?.requestedSettingsSection = .guides
-            windows?.open(.settings)
-        }
         statusMenu = NativeStatusMenu(model: model) { [weak windows] kind in windows?.open(kind) }
 
         // Respect the user's persisted login preference, including opt-out.
@@ -93,16 +86,6 @@ private final class ArmorApplicationDelegate: NSObject, NSApplicationDelegate {
         if model.needsRuleSetup {
             DispatchQueue.main.async { [weak windows] in windows?.open(.readiness) }
         }
-        if !pendingImportURLs.isEmpty { application(NSApplication.shared, open: pendingImportURLs); pendingImportURLs = [] }
-    }
-
-    func application(_ application: NSApplication, open urls: [URL]) {
-        guard let model else { pendingImportURLs = urls; return }
-        guard let url = urls.first(where: { $0.scheme == "zastava" }), url.absoluteString.utf8.count <= 65_536 else { return }
-        // Deep links are reviewable input, never permission to change a route.
-        model.networkEngine.importedRoute = url.absoluteString
-        model.requestedSettingsSection = .routes
-        windows?.open(.settings)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -135,7 +118,6 @@ private final class ArmorApplicationDelegate: NSObject, NSApplicationDelegate {
                     throw AppUpdateError.watchdog
                 }
                 try await model.closeClaudeBeforeApplicationExit()
-                try await model.networkEngine.shutdown()
                 if let update {
                     do {
                         guard watchdog?.isHealthy == true else { throw AppUpdateError.watchdog }
@@ -202,15 +184,13 @@ private final class ArmorApplicationDelegate: NSObject, NSApplicationDelegate {
 }
 
 @MainActor
-final class ArmorWindows: NSObject, NSWindowDelegate {
+private final class ArmorWindows {
     private let model: AppModel
     private var controllers: [NativeStatusMenu.WindowKind: NSWindowController] = [:]
-    private var frames: [NativeStatusMenu.WindowKind: NSRect] = [:]
 
-    init(model: AppModel) { self.model = model; super.init() }
+    init(model: AppModel) { self.model = model }
 
-    @discardableResult
-    func open(_ kind: NativeStatusMenu.WindowKind) -> NSWindowController {
+    func open(_ kind: NativeStatusMenu.WindowKind) {
         let controller: NSWindowController
         if let existing = controllers[kind] {
             controller = existing
@@ -220,7 +200,7 @@ final class ArmorWindows: NSObject, NSWindowDelegate {
             let size: NSSize
             switch kind {
             case .settings:
-                content = AnyView(SettingsView(initialSection: model.requestedSettingsSection ?? .protection, openHistory: { [weak self] in self?.open(.history) }).environmentObject(model))
+                content = AnyView(SettingsView(openHistory: { [weak self] in self?.open(.history) }).environmentObject(model))
                 title = "Настройки — Russian Armor"
                 size = SettingsLayout.defaultSize
             case .history:
@@ -228,7 +208,7 @@ final class ArmorWindows: NSObject, NSWindowDelegate {
                 title = "История — Russian Armor"
                 size = NSSize(width: 620, height: 460)
             case .traffic:
-                content = AnyView(TrafficView(monitor: model.traffic).modifier(NetworkPrivacyModifier(engine: model.networkEngine)))
+                content = AnyView(TrafficView(monitor: model.traffic))
                 title = "Соединения — Russian Armor"
                 size = NSSize(width: 960, height: 600)
             case .readiness:
@@ -253,25 +233,12 @@ final class ArmorWindows: NSObject, NSWindowDelegate {
             }
             window.setContentSize(kind == .readiness ? window.contentView?.fittingSize ?? size : size)
             window.isReleasedWhenClosed = false
-            if let frame = frames[kind] { window.setFrame(frame, display: false) }
-            else { window.center() }
-            window.delegate = self
+            window.center()
             controller = NSWindowController(window: window)
             controllers[kind] = controller
         }
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        return controller
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow,
-              let kind = controllers.first(where: { $0.value.window === window })?.key else { return }
-        frames[kind] = window.frame
-        // A closed hosting controller keeps observing every model update.
-        // Release its view graph; the protection model continues independently.
-        window.contentViewController = nil
-        controllers.removeValue(forKey: kind)
     }
 }

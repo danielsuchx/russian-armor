@@ -20,7 +20,7 @@ struct ReleaseVersion: Comparable, CustomStringConvertible, Sendable {
 }
 
 enum AppUpdateError: LocalizedError {
-    case noRelease, invalidRelease, github(Int), invalidDownload, invalidBundle, incompatible, diskImage, destination, replaced, watchdog, signature
+    case noRelease, invalidRelease, github(Int), invalidDownload, invalidBundle, incompatible, diskImage, destination, replaced, watchdog
 
     var errorDescription: String? {
         switch self {
@@ -34,7 +34,6 @@ enum AppUpdateError: LocalizedError {
         case .destination: return "Не удалось заменить приложение. Перенесите его из образа диска в доступную для записи папку «Программы» и откройте оттуда."
         case .replaced: return "Установленная копия изменилась. Перезапустите Russian Armor перед обновлением."
         case .watchdog: return "Наблюдатель перезапуска недоступен. Повторите установку после перезапуска Russian Armor."
-        case .signature: return "Подпись выпуска не прошла проверку. Установка отменена; защита остаётся включённой."
         }
     }
 }
@@ -44,17 +43,16 @@ struct GitHubUpdate: Equatable, Sendable {
     let url: URL
     let size: Int64
     let sha256: String
-    var signatureURL: URL { url.appendingPathExtension("sig") }
 
     static let repository = "https://github.com/danielsuchx/russian-armor"
     static let latest = URL(string: "https://api.github.com/repos/danielsuchx/russian-armor/releases/latest")!
     private static let assetName = "Russian-Armor.dmg"
 
-    private struct Release: Codable {
+    private struct Release: Decodable {
         let tag_name: String
         let draft, prerelease: Bool
         let assets: [Asset]
-        struct Asset: Codable {
+        struct Asset: Decodable {
             let name: String
             let size: Int64
             let browser_download_url: String
@@ -62,11 +60,11 @@ struct GitHubUpdate: Equatable, Sendable {
         }
     }
 
-    static func available(in data: Data, after current: ReleaseVersion, allowRollback: Bool = false) throws -> GitHubUpdate? {
+    static func available(in data: Data, after current: ReleaseVersion) throws -> GitHubUpdate? {
         guard let release = try? JSONDecoder().decode(Release.self, from: data),
               !release.draft, !release.prerelease, release.tag_name.first == "v",
               let version = ReleaseVersion(String(release.tag_name.dropFirst())) else { throw AppUpdateError.invalidRelease }
-        guard allowRollback ? version < current : version > current else { return nil }
+        guard version > current else { return nil }
         let matches = release.assets.filter { $0.name == assetName }
         let expected = "\(repository)/releases/download/\(release.tag_name)/\(assetName)"
         guard matches.count == 1, let asset = matches.first, asset.browser_download_url == expected,
@@ -87,32 +85,6 @@ struct GitHubUpdate: Equatable, Sendable {
         if (response as? HTTPURLResponse)?.statusCode == 404 { throw AppUpdateError.noRelease }
         try validate(response)
         return try available(in: data, after: current)
-    }
-
-    static func rollbackVersions(in data: Data, before current: ReleaseVersion) throws -> [GitHubUpdate] {
-        guard let releases = try? JSONDecoder().decode([Release].self, from: data) else { throw AppUpdateError.invalidRelease }
-        let encoder = JSONEncoder()
-        // Only signed, stable, canonical packages are eligible. Old unsigned
-        // 0.2.x images are never offered as a shortcut around signature checks.
-        return releases.compactMap { release -> GitHubUpdate? in
-            guard !release.draft, !release.prerelease,
-                  release.assets.contains(where: { $0.name == assetName + ".sig" && $0.size <= 256
-                    && $0.browser_download_url == "\(repository)/releases/download/\(release.tag_name)/\(assetName).sig" }) else { return nil }
-            // Round-trip the validated release shape through JSONSerialization;
-            // its original fields are used by the same selection validator.
-            guard let bytes = try? encoder.encode(release) else { return nil }
-            return try? available(in: bytes, after: current, allowRollback: true)
-        }.sorted { $0.version > $1.version }.prefix(8).map { $0 }
-    }
-
-    static func history(before current: ReleaseVersion, session: URLSession) async throws -> [GitHubUpdate] {
-        var request = URLRequest(url: URL(string: "https://api.github.com/repos/danielsuchx/russian-armor/releases?per_page=30")!)
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("Russian-Armor-Updater", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await session.data(for: request)
-        try validate(response)
-        guard data.count <= 2_097_152 else { throw AppUpdateError.invalidRelease }
-        return try rollbackVersions(in: data, before: current)
     }
 
     static func validate(_ response: URLResponse) throws {

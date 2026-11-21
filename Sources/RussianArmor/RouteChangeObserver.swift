@@ -100,19 +100,16 @@ final class RouteChangeObserver {
     private func drainChanges() {
         guard descriptor >= 0 else { return }
         var buffer = [UInt8](repeating: 0, count: 8_192)
+        var routeChanged = false
         while true {
             let count = recv(descriptor, &buffer, buffer.count, MSG_DONTWAIT)
             guard count > 0 else { break }
-            // The routing socket is only a wake-up source. macOS emits
-            // RTM_CHANGE/RTM_REDIRECT messages for internal maintenance too;
-            // the fingerprint decides whether the network actually changed.
-            _ = Self.containsRouteChange(buffer.prefix(count))
+            if Self.containsRouteChange(buffer.prefix(count)) { routeChanged = true }
         }
         let changed = filter.accepts(fingerprint())
-        // Revoke permission immediately for a meaningful network change. A
-        // repeated routing-socket notification with the same fingerprint must
-        // not repeatedly pause Claude.
-        if changed { onChange?() }
+        // Revoke permission immediately. Only the subsequent external requests
+        // are debounced; repeated route messages must not postpone the pause.
+        if changed || routeChanged { onChange?() }
     }
 
     // Routing socket messages begin with length, version and type. Treat

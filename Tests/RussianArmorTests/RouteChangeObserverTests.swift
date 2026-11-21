@@ -3,7 +3,7 @@ import XCTest
 @testable import RussianArmor
 
 final class RouteChangeObserverTests: XCTestCase {
-    func testRoutingSocketMessagesRecognizePotentialRouteChanges() {
+    func testRouteChangesAreRecognizedEvenWithUnchangedFingerprint() {
         for type in [RTM_ADD, RTM_DELETE, RTM_CHANGE, RTM_REDIRECT] {
             XCTAssertTrue(RouteChangeObserver.containsRouteChange([4, 0, UInt8(RTM_VERSION), UInt8(type)][...]))
         }

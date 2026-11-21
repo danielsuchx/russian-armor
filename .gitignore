@@ -2,11 +2,8 @@
 .build/
 .swiftpm/
 dist/
-NetworkEngine/src-tauri/target/
-NetworkEngine/src-tauri/gen/
 *.xcuserstate
 xcuserdata/
-Support/ClaudeFilter/*.xcodeproj/
 
 # Local development settings and tools
 /.claude/
@@ -14,4 +11,3 @@ Support/ClaudeFilter/*.xcodeproj/
 /.t3/
 /.env
 /.env.*
-/.release-signing/

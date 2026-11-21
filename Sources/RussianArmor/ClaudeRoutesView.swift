@@ -2,7 +2,6 @@ import ArmorCore
 import SwiftUI
 
 struct ClaudeRoutesView: View {
-    @Environment(\.networkAddressesHidden) private var hideIP
     @ObservedObject var monitor: ClaudeRouteMonitor
     let vpnLocation: VPNLocation
     @State private var showsDetails = false
@@ -36,7 +35,7 @@ struct ClaudeRoutesView: View {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text("\(route.connection.process.name) · PID \(route.connection.process.id.pid) · \(route.connection.transport.rawValue)")
                                         .font(AppTypography.description.weight(.semibold))
-                                    Text(hideIP ? EnginePrivacy.display("\(route.connection.local.title) → \(route.connection.remote.title)") : "\(route.connection.local.title) → \(route.connection.remote.title)")
+                                    Text("\(route.connection.local.title) → \(route.connection.remote.title)")
                                         .font(AppTypography.description.monospaced()).textSelection(.enabled)
                                     Text(route.title).font(AppTypography.description).foregroundStyle(.secondary)
                                     Text("Интерфейс адреса источника: \(route.sourceInterfaces.isEmpty ? "не найден" : route.sourceInterfaces.joined(separator: ", ")). Маршрут ОС к узлу: \(route.routeInterface ?? "не найден").")

@@ -3,9 +3,9 @@ import XCTest
 @testable import RussianArmor
 
 final class SettingsPresentationTests: XCTestCase {
-    func testSettingsNavigationPreservesExistingSectionsAndAddsNetworkTools() {
-        XCTAssertEqual(SettingsSection.allCases.map(\.title), ["Защита", "Сетевой шлюз", "Маршруты", "Проверки сети", "Приложения", "Профили", "Диагностика", "Помощь", "Основные"])
-        XCTAssertEqual(Set(SettingsSection.allCases.map(\.symbol)).count, SettingsSection.allCases.count)
+    func testSettingsNavigationHasThreeTaskBasedSections() {
+        XCTAssertEqual(SettingsSection.allCases.map(\.title), ["Защита", "Диагностика", "Основные"])
+        XCTAssertEqual(Set(SettingsSection.allCases.map(\.symbol)).count, 3)
     }
 
     func testConfirmedCountryIsNotAnOrangeWarningOrANetworkSafetyClaim() {

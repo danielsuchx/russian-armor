@@ -108,7 +108,7 @@ struct StatusPanelContent: Equatable {
             if let comparison = model.countryComparison {
                 let countrySource = comparison.agrees
                     ? "страна подтверждена обоими сервисами"
-                    : "геобазы расходятся: \(comparison.detail); для разрешения используется страна по ipwho.is, явный запрет второго ответа сохраняется"
+                    : "геобазы расходятся: \(comparison.detail); \(model.preferences.accessConfiguration == nil ? "страна по ipwho.is" : "обе страны проверяются правилами")"
                 externalDetail = "IP подтверждён через \(comparison.services); \(countrySource) · \(Self.time(value.checkedAt)). Только запросы Russian Armor, не маршрут других приложений."
             } else {
                 externalDetail = "\(value.provider.title) · \(Self.time(value.checkedAt)). Только запрос Russian Armor, не маршрут других приложений."
@@ -151,10 +151,6 @@ struct StatusPanelContent: Equatable {
             diagnosticsSummary = "Автопроверка IP ожидает доступную сеть"
         }
         events = Array(model.journal.events.prefix(4))
-        if model.networkEngine.hideIP {
-            ip = EnginePrivacy.display(ip)
-            externalDetail = EnginePrivacy.display(externalDetail)
-        }
     }
 
     static func time(_ date: Date) -> String {

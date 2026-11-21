@@ -2,7 +2,6 @@ import ArmorCore
 import SwiftUI
 
 struct TrafficView: View {
-    @Environment(\.networkAddressesHidden) private var hideIP
     @ObservedObject var monitor: TrafficMonitor
     @State private var query = ""
     @State private var onlyIPv6 = false
@@ -39,10 +38,8 @@ struct TrafficView: View {
             Text("Только метаданные сокетов текущего пользователя: процесс, числовые IP и порты. Без содержимого запросов, DNS-запросов и сохранения адресов. При включённой записи сетевых событий несколько внешних адресов подписанного туннеля Happ отмечаются в истории без самих IP; это не счётчик VPN-серверов. «Остановить и очистить» очищает снимок, но не историю; после перезапуска сбор выключен.")
                 .font(AppTypography.description).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
-                Group {
-                    if hideIP { SecureField("Найти процесс, PID или IP", text: $query) }
-                    else { TextField("Найти процесс, PID или IP", text: $query) }
-                }.textFieldStyle(.roundedBorder).frame(maxWidth: 320)
+                TextField("Найти процесс, PID или IP", text: $query).textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 320)
                 Toggle("Только IPv6", isOn: $onlyIPv6)
                 Toggle("Скрыть loopback", isOn: $hideLoopback)
             }
@@ -74,9 +71,9 @@ struct TrafficView: View {
                 }.width(min: 120, ideal: 155)
                 TableColumn("Протокол") { row in Text("\(row.transport.rawValue) · \(row.remote.version.rawValue)") }
                     .width(95)
-                TableColumn("Удалённый адрес") { row in Text(hideIP ? EnginePrivacy.display(row.remote.title) : row.remote.title).monospaced().textSelection(.enabled) }
+                TableColumn("Удалённый адрес") { row in Text(row.remote.title).monospaced().textSelection(.enabled) }
                     .width(min: 160, ideal: 230)
-                TableColumn("Локальный адрес") { row in Text(hideIP ? EnginePrivacy.display(row.local.title) : row.local.title).monospaced().textSelection(.enabled) }
+                TableColumn("Локальный адрес") { row in Text(row.local.title).monospaced().textSelection(.enabled) }
                     .width(min: 160, ideal: 210)
                 TableColumn("Состояние") { row in Text(row.state) }.width(min: 85, ideal: 110)
             }

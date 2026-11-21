@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/danielsuchx/russian-armor/releases/latest/download/Russian-Armor.dmg">
+  <a href="https://github.com/danielsuchx/russian-armor/releases/download/v0.4.0/Russian-Armor.dmg">
     <img src="assets/download-macos.svg" alt="Скачать Russian Armor для macOS" width="220" height="40">
   </a>
 </p>
@@ -98,7 +98,7 @@ MIT-ядро ai-antiban работает как скрытый helper. Запу�
 
 Готовый образ подходит для **macOS 13 и новее**, для Mac с **Apple Silicon и Intel**. Xcode и Терминал для установки не нужны.
 
-1. **[Скачайте Russian-Armor.dmg](https://github.com/danielsuchx/russian-armor/releases/latest/download/Russian-Armor.dmg).**
+1. **[Скачайте Russian-Armor.dmg](https://github.com/danielsuchx/russian-armor/releases/download/v0.4.0/Russian-Armor.dmg).**
 2. Откройте скачанный образ.
 3. Перетащите **Russian Armor.app** на ярлык **Applications («Программы»)** в окне образа.
 4. Извлеките образ через Finder.
@@ -336,7 +336,7 @@ firewall и не является оценкой отсутствия утече
 Начиная с 0.2.2, откройте **«Настройки → Основные → Обновления»** и нажмите **«Проверить обновление»**.
 Если на GitHub опубликована более новая стабильная версия, нажмите **«Установить обновление»**.
 Armor загрузит образ, сверит его SHA-256 и подпись приложения и попросит подтвердить закрытие Claude перед перезапуском.
-Для первого обновления с 0.2.1 скачайте [DMG из GitHub Releases](https://github.com/danielsuchx/russian-armor/releases/latest/download/Russian-Armor.dmg), выйдите из старой версии и замените приложение в «Программах».
+Для первого обновления с 0.2.1 скачайте [DMG из GitHub Releases](https://github.com/danielsuchx/russian-armor/releases/download/v0.4.0/Russian-Armor.dmg), выйдите из старой версии и замените приложение в «Программах».
 
 Для удаления сначала выйдите из Russian Armor, подтвердив отключение защиты и закрытие Claude. Затем переместите приложение из **«Программ»** в Корзину. Если вы собирали приложение самостоятельно, удалите созданную `.app`; исходный код также можно удалить. Локальные настройки и история при этом автоматически не стираются.
 
